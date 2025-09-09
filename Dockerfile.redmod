@@ -8,10 +8,10 @@ RUN pip install -e .
 # copy the rest of the code
 
 # RUN mkdir -p /secrets
-# RUN --mount=type=secret,id=wandb_key \
-#   /opt/venv/bin/wandb login $(cat /run/secrets/wandb_key)
+RUN --mount=type=secret,id=wandb_key \
+  /usr/local/bin/wandb login $(cat /run/secrets/wandb_key)
 
-# RUN --mount=type=secret,id=huggingface_key \
-#   /opt/venv/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
+RUN --mount=type=secret,id=huggingface_key \
+  /usr/local/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
 
 # COPY . .

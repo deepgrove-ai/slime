@@ -9,3 +9,4 @@ sglang
 torch
 transformers
 wandb
+huggingface_hub
