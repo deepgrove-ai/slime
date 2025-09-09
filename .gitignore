@@ -191,3 +191,5 @@ local/
 glm/
 _examples_synced/
 .env
+
+secrets/

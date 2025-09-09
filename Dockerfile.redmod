@@ -1,0 +1,17 @@
+FROM zhuzilin/slime:latest AS slime
+
+WORKDIR /root/slime
+# COPY pyproject.toml and setup.py and requirements.txt
+COPY pyproject.toml setup.py requirements.txt README.md ./
+# install dependencies
+RUN pip install -e .
+# copy the rest of the code
+
+# RUN mkdir -p /secrets
+# RUN --mount=type=secret,id=wandb_key \
+#   /opt/venv/bin/wandb login $(cat /run/secrets/wandb_key)
+
+# RUN --mount=type=secret,id=huggingface_key \
+#   /opt/venv/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
+
+# COPY . .
