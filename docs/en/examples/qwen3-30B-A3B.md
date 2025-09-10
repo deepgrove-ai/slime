@@ -8,6 +8,7 @@ The environment setup, model download, data, and checkpoint conversion are the s
 To convert huggingface checkpoint to torch_dist, please try:
 
 ```bash
+huggingface-cli download Qwen/Qwen3-30B-A3B --local-dir /root/Qwen3-30B-A3B
 cd slime/
 pip install -e .
 source scripts/models/qwen3-30B-A3B.sh

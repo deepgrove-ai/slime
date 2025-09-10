@@ -1,5 +1,22 @@
 FROM zhuzilin/slime:latest AS slime
 
+
+
+# sandwitch norm for GLM models
+# git diff > megatron.patch
+# sed -i 's/\r$//' megatron.patch
+# tail -c1 megatron.patch | od -An -t x1 | grep -qi '0a' || printf '\n' >> megatron.patch
+
+# WORKDIR /root/Megatron-LM/
+# COPY megatron.patch /root/Megatron-LM/
+# RUN \
+#   git apply megatron.patch && \
+#   if grep -R -n '^<<<<<<< ' .; then \
+#   echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+#   exit 1; \
+#   fi && \
+#   rm megatron.patch
+
 WORKDIR /root/slime
 # COPY pyproject.toml and setup.py and requirements.txt
 COPY pyproject.toml setup.py requirements.txt README.md ./
@@ -14,4 +31,6 @@ RUN --mount=type=secret,id=wandb_key \
 RUN --mount=type=secret,id=huggingface_key \
   /usr/local/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
 
-# COPY . .
+COPY . .
+
+RUN pip install --no-deps --no-build-isolation --force-reinstall -e .

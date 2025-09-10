@@ -81,6 +81,9 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 
 For larger models, you can use `torchrun` to start the covnersion script to convert with multi-gpus or even multi-nodes.
 
+> Note that this just hangs for larger models without torchrun.
+
+`PYTHONPATH=/root/Megatron-LM torchrun --standalone --nnodes=1 --nproc-per-node=8 tools/convert_hf_to_torch_dist.py     ${MODEL_ARGS[@]} --hf-checkpoint /root/Qwen3-30B-A3B --save /root/Qwen3-30B-A3B_torch_dist`
 ### Convert from Megatron Format to Hugging Face Format
 
 You can use the following script to convert the saved Megatron chekcpoints back to Hugging Face format:

@@ -29,6 +29,7 @@ def get_model_provider_func(args):
             Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
         """
         use_te = args.transformer_impl == "transformer_engine"
+        # True by default
 
         if args.record_memory_history:
             torch.cuda.memory._record_memory_history(
@@ -69,6 +70,7 @@ def get_model_provider_func(args):
                 }
                 if vp_stage is not None:
                     kwargs["vp_stage"] = vp_stage
+                    
                 transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
             else:
                 # Define the decoder layer spec

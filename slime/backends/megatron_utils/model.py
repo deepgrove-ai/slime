@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from functools import partial
 
 import torch
+
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
