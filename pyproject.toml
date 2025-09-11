@@ -31,6 +31,8 @@ dependencies = [
     "transformers",
     "wandb",
     "huggingface_hub",
+    "veomni",
+    "torch_memory_saver",
 ]
 
 [project.optional-dependencies]
@@ -70,8 +72,6 @@ sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 default_section = "THIRDPARTY"
 extend_skip = ["setup.py", "docs/source/conf.py"]
 
-[tool.black]
-line_length = 119
 
 [tool.ruff]
 line-length = 119
@@ -111,3 +111,8 @@ dev-dependencies = [
     "isort>=5.12.0",
     "ruff>=0.1.0",
 ]
+
+
+[tool.uv.sources]
+"veomni" = { path = "VeOmni", editable = true }
+"torch_memory_saver" = { git = "https://github.com/fzyzcjy/torch_memory_saver.git" }

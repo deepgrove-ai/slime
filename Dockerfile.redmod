@@ -1,6 +1,6 @@
 FROM zhuzilin/slime:latest AS slime
 
-
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 RUN rm -rf /root/Megatron-LM
 WORKDIR /root/Megatron-LM
@@ -8,35 +8,29 @@ WORKDIR /root/Megatron-LM
 
 # RUN pip install -e .
 
-# # sandwitch norm for GLM models
-# # git diff > megatron.patch
-# # sed -i 's/\r$//' megatron.patch
-# # tail -c1 megatron.patch | od -An -t x1 | grep -qi '0a' || printf '\n' >> megatron.patch
+WORKDIR /root/slime
+# COPY pyproject.toml and setup.py and requirements.txt
+COPY pyproject.toml setup.py requirements.txt README.md LICENSE ./
+COPY VeOmni/pyproject.toml VeOmni/setup.py VeOmni/requirements.txt VeOmni/README.md VeOmni/LICENSE /root/slime/VeOmni/
+COPY VeOmni/veomni/__init__.py /root/slime/VeOmni/veomni/__init__.py
+# install dependencies
+# ENV UV_SYSTEM_PYTHON=1
+ENV SETUPTOOLS_SCM_PRETEND_VERSION="0.0.0"
+ENV UV_PROJECT_ENVIRONMENT=/usr
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ENV UV_LINK_MODE=copy
 
-# # WORKDIR /root/Megatron-LM/
-# # COPY megatron.patch /root/Megatron-LM/
-# # RUN \
-# #   git apply megatron.patch && \
-# #   if grep -R -n '^<<<<<<< ' .; then \
-# #   echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-# #   exit 1; \
-# #   fi && \
-# #   rm megatron.patch
-
-# WORKDIR /root/slime
-# # COPY pyproject.toml and setup.py and requirements.txt
-# COPY pyproject.toml setup.py requirements.txt README.md ./
-# # install dependencies
+RUN uv sync --inexact 
 # RUN pip install -e .
-# # copy the rest of the code
+# copy the rest of the code
 
-# # RUN mkdir -p /secrets
-# RUN --mount=type=secret,id=wandb_key \
-#   /usr/local/bin/wandb login $(cat /run/secrets/wandb_key)
+# RUN mkdir -p /secrets
+RUN --mount=type=secret,id=wandb_key \
+  /usr/local/bin/wandb login $(cat /run/secrets/wandb_key)
 
-# RUN --mount=type=secret,id=huggingface_key \
-#   /usr/local/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
+RUN --mount=type=secret,id=huggingface_key \
+  /usr/local/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
 
-# COPY . .
+COPY . .
 
-# RUN pip install --no-deps --no-build-isolation --force-reinstall -e .
+# RUN uv pip install --no-deps --no-build-isolation --force-reinstall -e .

@@ -1,5 +1,6 @@
+from dataclasses import dataclass, field
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Literal
 
 from transformers import AutoConfig
 
@@ -26,6 +27,7 @@ def reset_arg(parser, name, **kwargs):
 def get_slime_extra_args_provider(add_custom_arguments=None):
     def add_slime_arguments(parser):
         # Ray
+
         def add_cluster_arguments(parser):
             parser.add_argument("--actor-num-nodes", type=int, default=1, help="Number of nodes for training actor")
             parser.add_argument(
@@ -82,6 +84,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         # rollout
+
         def add_rollout_arguments(parser):
             parser.add_argument(
                 "--hf-checkpoint",
@@ -301,6 +304,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         # data
+
         def add_data_arguments(parser):
             # dataset
             # TODO: maybe add an num_epoch and calculate the num_rollout from buffer
@@ -615,6 +619,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         # wandb
+
         def add_wandb_arguments(parser):
             # wandb parameters
             parser.add_argument("--use-wandb", action="store_true", default=False)
@@ -672,6 +677,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         # debug
+
         def add_debug_arguments(parser):
             parser.add_argument(
                 "--save-debug-rollout-data",
@@ -915,11 +921,20 @@ def parse_args(add_custom_arguments=None):
         args = xtuner_parse_args(add_slime_arguments)
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
-    else:
-        warning_for_unfinished_backend(backend)
-        from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
-        args = load_fsdp_args(extra_args_provider=add_slime_arguments)
+    elif backend == "veomni":
+        warning_for_unfinished_backend(backend)
+        from slime.backends.veomni_utils.arguments import load_veomni_args
+
+        args = load_veomni_args(add_slime_arguments)
+        args.rank = 0
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+    else:
+        raise ValueError(f"Invalid backend: {backend}")
+        # warning_for_unfinished_backend(backend)
+        # from slime.backends.fsdp_utils.arguments import load_fsdp_args
+
+        # args = load_fsdp_args(extra_args_provider=add_slime_arguments)
 
     slime_validate_args(args)
 
@@ -1015,7 +1030,7 @@ def slime_validate_args(args):
         args.offload = False
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
-        "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
+        "debug_rollout_only and debug_train_only cannot be set at the same time, please set only one of them."
     )
 
     # always true on offload for colocate at the moment.
@@ -1069,7 +1084,7 @@ def slime_validate_args(args):
     else:
         # if num_epoch is not set, we should set num_rollout
         assert args.num_rollout is not None, (
-            "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
+            "num_epoch is not set, but num_rollout is not set, please set --num-rollout or --num-epoch"
         )
 
 

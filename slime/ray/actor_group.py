@@ -89,7 +89,12 @@ class RayTrainGroup:
             from slime.backends.xtuner_utils.actor import XTunerTrainRayActor
 
             actor_impl = XTunerTrainRayActor
+        elif backend == "veomni":
+            from slime.backends.veomni_utils.actor import VeOmniTrainRayActor
+
+            actor_impl = VeOmniTrainRayActor
         else:
+            raise ValueError(f"Invalid backend: {backend}")
             from slime.backends.fsdp_utils import FSDPTrainRayActor
 
             actor_impl = FSDPTrainRayActor
