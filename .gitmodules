@@ -1,3 +1,6 @@
 [submodule "Megatron-LM"]
 	path = Megatron-LM
 	url = git@github.com:NVIDIA/Megatron-LM.git
+[submodule "VeOmni"]
+	path = VeOmni
+	url = git@github.com:deepgrove-ai/VeOmni.git
