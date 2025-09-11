@@ -16,8 +16,9 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 
+from slime.utils.wandb_utils import init_wandb_secondary
 from veomni.distributed.offloading import build_activation_offloading_context
-from veomni.distributed.parallel_state import init_parallel_state
+from veomni.distributed.parallel_state import init_parallel_state, get_parallel_state
 from veomni.models.auto import build_foundation_model
 from veomni.distributed.torch_parallelize import build_parallelize_model
 from veomni.optim.optimizer import build_optimizer
@@ -80,6 +81,9 @@ class VeOmniTrainRayActor(TrainRayActor):
             ulysses_size=args.ulysses_parallel_size,
             dp_mode=args.data_parallel_mode,
         )
+        # TODO: Fix global rank stuffs for when colocate is disabled
+        if dist.get_rank() == 0:
+            init_wandb_secondary(args, wandb_run_id)
 
         torch.manual_seed(args.seed)
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
