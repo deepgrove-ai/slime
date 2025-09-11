@@ -2,35 +2,41 @@ FROM zhuzilin/slime:latest AS slime
 
 
 
-# sandwitch norm for GLM models
-# git diff > megatron.patch
-# sed -i 's/\r$//' megatron.patch
-# tail -c1 megatron.patch | od -An -t x1 | grep -qi '0a' || printf '\n' >> megatron.patch
+RUN rm -rf /root/Megatron-LM
+WORKDIR /root/Megatron-LM
+# COPY ./Megatron-LM /root/Megatron-LM
 
-# WORKDIR /root/Megatron-LM/
-# COPY megatron.patch /root/Megatron-LM/
-# RUN \
-#   git apply megatron.patch && \
-#   if grep -R -n '^<<<<<<< ' .; then \
-#   echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-#   exit 1; \
-#   fi && \
-#   rm megatron.patch
+# RUN pip install -e .
 
-WORKDIR /root/slime
-# COPY pyproject.toml and setup.py and requirements.txt
-COPY pyproject.toml setup.py requirements.txt README.md ./
-# install dependencies
-RUN pip install -e .
-# copy the rest of the code
+# # sandwitch norm for GLM models
+# # git diff > megatron.patch
+# # sed -i 's/\r$//' megatron.patch
+# # tail -c1 megatron.patch | od -An -t x1 | grep -qi '0a' || printf '\n' >> megatron.patch
 
-# RUN mkdir -p /secrets
-RUN --mount=type=secret,id=wandb_key \
-  /usr/local/bin/wandb login $(cat /run/secrets/wandb_key)
+# # WORKDIR /root/Megatron-LM/
+# # COPY megatron.patch /root/Megatron-LM/
+# # RUN \
+# #   git apply megatron.patch && \
+# #   if grep -R -n '^<<<<<<< ' .; then \
+# #   echo "Patch failed to apply cleanly. Please resolve conflicts." && \
+# #   exit 1; \
+# #   fi && \
+# #   rm megatron.patch
 
-RUN --mount=type=secret,id=huggingface_key \
-  /usr/local/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
+# WORKDIR /root/slime
+# # COPY pyproject.toml and setup.py and requirements.txt
+# COPY pyproject.toml setup.py requirements.txt README.md ./
+# # install dependencies
+# RUN pip install -e .
+# # copy the rest of the code
 
-COPY . .
+# # RUN mkdir -p /secrets
+# RUN --mount=type=secret,id=wandb_key \
+#   /usr/local/bin/wandb login $(cat /run/secrets/wandb_key)
 
-RUN pip install --no-deps --no-build-isolation --force-reinstall -e .
+# RUN --mount=type=secret,id=huggingface_key \
+#   /usr/local/bin/huggingface-cli login --token $(cat /run/secrets/huggingface_key)
+
+# COPY . .
+
+# RUN pip install --no-deps --no-build-isolation --force-reinstall -e .
