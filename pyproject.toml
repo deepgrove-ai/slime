@@ -26,19 +26,22 @@ dependencies = [
     "pylatexenc",
     "pyyaml",
     "ray[default]",
-    "sglang",
     "torch",
-    "transformers",
+    "transformers>=4.56.0",
+    "liger-kernel>=0.5.5",
     "wandb",
     "huggingface_hub",
     "veomni",
     "torch_memory_saver",
 ]
 
-[project.optional-dependencies]
-dev = ["pytest", "black", "isort", "ruff"]
+[dependency-groups]
+docker-override = ["sglang>=0.5.2"]
+dev = ["pytest>=7.0.0", "black>=23.0.0", "isort>=5.12.0", "ruff>=0.1.0"]
+
 
 [tool.hatch.build.targets.wheel]
+
 packages = ["slime", "slime_plugins"]
 
 [tool.hatch.build.targets.wheel.sources]
@@ -105,14 +108,15 @@ markers = [
 ]
 
 [tool.uv]
-dev-dependencies = [
-    "pytest>=7.0.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
-    "ruff>=0.1.0",
-]
 
+default-groups = ["dev", "docker-override"]
 
 [tool.uv.sources]
 "veomni" = { path = "VeOmni", editable = true }
 "torch_memory_saver" = { git = "https://github.com/fzyzcjy/torch_memory_saver.git" }
+torch = [{ index = "torch_12.8", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "torch_12.8"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true

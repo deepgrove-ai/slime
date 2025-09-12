@@ -20,7 +20,7 @@ ENV UV_PROJECT_ENVIRONMENT=/usr
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV UV_LINK_MODE=copy
 
-RUN uv sync --inexact 
+RUN uv sync --inexact --no-group docker-override
 # RUN pip install -e .
 # copy the rest of the code
 
