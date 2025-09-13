@@ -91,7 +91,7 @@ class VeOmniTrainRayActor(TrainRayActor):
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
             self.model = build_foundation_model(
                 config_path=args.hf_checkpoint,
-                quantize=True,  # Student model quantization
+                quantize=False,  # Student model quantization
                 weights_path=args.hf_checkpoint,
                 torch_dtype="bfloat16",
                 # attn_implementation=args.model.attn_implementation,
@@ -114,7 +114,8 @@ class VeOmniTrainRayActor(TrainRayActor):
             enable_mixed_precision=args.enable_mixed_precision,
             enable_gradient_checkpointing=args.enable_gradient_checkpointing,
             enable_fsdp_offload=args.enable_fsdp_offload,
-            basic_modules=self.model._no_split_modules,
+            # For some reason this messes with grad norms
+            # basic_modules=self.model._no_split_modules,
             enable_reentrant=args.enable_reentrant,
             enable_forward_prefetch=args.enable_forward_prefetch,
         )
@@ -284,6 +285,7 @@ class VeOmniTrainRayActor(TrainRayActor):
 
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
+
         for mbs_id, batch in enumerate(padded_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(input_ids=batch["tokens"]).logits
