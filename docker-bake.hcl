@@ -1,5 +1,5 @@
 
-target "slime" {
+target "redmod-slime" {
   contexts = {
   }
   context    = "./"
