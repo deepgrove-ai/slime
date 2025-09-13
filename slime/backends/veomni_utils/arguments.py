@@ -31,10 +31,10 @@ class VeOmniArgs:
     # fsdp_backward_prefetch: bool = True
 
     enable_full_shard: bool = True
-    enable_mixed_precision: bool = True
-    enable_gradient_checkpointing: bool = True
+    enable_mixed_precision: bool = False
+    enable_gradient_checkpointing: bool = False
     enable_fsdp_offload: bool = False
-    enable_forward_prefetch: bool = True
+    enable_forward_prefetch: bool = False
     enable_reentrant: bool = False
 
     data_parallel_mode: str = field(
@@ -107,7 +107,9 @@ def parse_veomni_cli(extra_args_provider=None):
             continue
         arg_type = f.type if f.type != Optional[str] else str
         if arg_type is bool:
-            parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
+            # Get default value
+            default_value = f.default
+            parser.add_argument(f"--{f.name.replace('_', '-')}", default=default_value)
         else:
             parser.add_argument(f"--{f.name.replace('_', '-')}", type=arg_type, default=f.default)
 

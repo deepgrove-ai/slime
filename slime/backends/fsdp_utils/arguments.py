@@ -45,10 +45,7 @@ def parse_fsdp_cli(extra_args_provider=None):
         if f.name == "config":
             continue
         arg_type = f.type if f.type != Optional[str] else str
-        if arg_type is bool:
-            parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
-        else:
-            parser.add_argument(f"--{f.name.replace('_', '-')}", type=arg_type, default=f.default)
+        parser.add_argument(f"--{f.name.replace('_', '-')}", type=arg_type, default=f.default)
 
     if extra_args_provider is not None:
         parser = extra_args_provider(parser)
