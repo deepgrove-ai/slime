@@ -1,6 +1,8 @@
 import ray
+from ray.actor import ActorProxy
 import torch
 import torch.distributed as dist
+from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -20,7 +22,7 @@ class UpdateWeightFromTensor:
         self.args = args
         self.model = model
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+    def connect_rollout_engines(self, rollout_engines: list[ActorProxy[SGLangEngine]], rollout_engine_lock):
         self.rollout_engines = rollout_engines
 
         # Here we assume the gpu id of rollout engines and train actors are the same.
@@ -42,7 +44,6 @@ class UpdateWeightFromTensor:
         monkey_patch_torch_reductions()
         with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
             named_tensors = [(name, param) for name, param in self.model.state_dict().items()]
-
         if use_flattened_tensor_bucket:
             flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
             metadata = flattened_tensor_bucket.get_metadata()

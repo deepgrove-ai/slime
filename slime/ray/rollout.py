@@ -4,6 +4,7 @@ import time
 from typing import List
 
 import ray
+from ray.actor import ActorProxy
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
@@ -13,7 +14,7 @@ from slime.utils.http_utils import find_available_port, get_host_info, run_route
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 
-def create_rollout_engines(args, pg):
+def create_rollout_engines(args, pg) -> List[ActorProxy[SGLangEngine]]:
     if args.debug_train_only:
         return []
 
@@ -24,7 +25,7 @@ def create_rollout_engines(args, pg):
 
     RolloutRayActor = ray.remote(SGLangEngine)
 
-    rollout_engines = []
+    rollout_engines: List[ActorProxy[SGLangEngine]] = []
     for i in range(num_engines):
         num_gpus = 0.2
         num_cpus = num_gpus

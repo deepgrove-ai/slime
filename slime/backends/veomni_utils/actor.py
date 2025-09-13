@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 
 from veomni.utils.arguments import ModelArguments, TrainingArguments
 from dataclasses import field
+from ray.actor import ActorProxy
+from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 
 
 def data_parallel_size(args: VeOmnniFullArgs):
@@ -173,7 +175,7 @@ class VeOmniTrainRayActor(TrainRayActor):
 
         raise NotImplementedError()
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+    def connect_rollout_engines(self, rollout_engines: list[ActorProxy[SGLangEngine]], rollout_engine_lock):
         self.rollout_engines = rollout_engines
 
         if self.args.debug_train_only or self.args.debug_rollout_only:

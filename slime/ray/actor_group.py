@@ -2,11 +2,15 @@ import os
 from typing import Dict, Optional
 
 import ray
+from ray.actor import ActorProxy
 import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from slime.ray.train_actor import TrainRayActor
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
+from slime.ray.rollout import RolloutManager
+from typing import cast
 
 
 class RayTrainGroup:
@@ -98,24 +102,27 @@ class RayTrainGroup:
 
             actor_impl = FSDPTrainRayActor
 
-        TrainRayActor = ray.remote(
+        TrainRayActorRemote = ray.remote(
             num_gpus=1,
             runtime_env={"env_vars": env_vars},
         )(actor_impl)
 
         # Create worker actors
-        self._actor_handlers = []
+        self._actor_handlers: list[ActorProxy[TrainRayActor]] = []
         master_addr, master_port = None, None
         for rank in range(world_size):
-            actor = TrainRayActor.options(
-                num_cpus=num_gpus_per_actor,
-                num_gpus=num_gpus_per_actor,
-                resources=self._resources,
-                scheduling_strategy=PlacementGroupSchedulingStrategy(
-                    placement_group=pg,
-                    placement_group_bundle_index=reordered_bundle_indices[rank],
-                ),
-            ).remote(world_size, rank, master_addr, master_port, wandb_run_id)
+            actor = cast(
+                ActorProxy[TrainRayActor],
+                TrainRayActorRemote.options(
+                    num_cpus=num_gpus_per_actor,
+                    num_gpus=num_gpus_per_actor,
+                    resources=self._resources,
+                    scheduling_strategy=PlacementGroupSchedulingStrategy(
+                        placement_group=pg,
+                        placement_group_bundle_index=reordered_bundle_indices[rank],
+                    ),
+                ).remote(world_size, rank, master_addr, master_port, wandb_run_id),
+            )
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
@@ -127,7 +134,7 @@ class RayTrainGroup:
         self.args = args
         return [actor.init.remote(args, role, self._wandb_run_id, with_ref=with_ref) for actor in self._actor_handlers]
 
-    def async_init_weight_update_connections(self, rollout):
+    def async_init_weight_update_connections(self, rollout: "RolloutManager"):
         """
         Connect rollout engines and actors, e.g. initialize the process group between them
         to update weights after each training stage.
