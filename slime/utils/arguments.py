@@ -930,11 +930,12 @@ def parse_args(add_custom_arguments=None):
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
-        raise ValueError(f"Invalid backend: {backend}")
-        # warning_for_unfinished_backend(backend)
-        # from slime.backends.fsdp_utils.arguments import load_fsdp_args
+        warning_for_unfinished_backend(backend)
+        from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
-        # args = load_fsdp_args(extra_args_provider=add_slime_arguments)
+        args = load_fsdp_args(extra_args_provider=add_slime_arguments)
+        args.rank = 0
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
     slime_validate_args(args)
 

@@ -58,7 +58,6 @@ WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-veomni
    --wandb-group qwen3-0.6B-test
-
 )
 
 SGLANG_ARGS=(

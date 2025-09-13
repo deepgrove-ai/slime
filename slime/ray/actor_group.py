@@ -94,7 +94,6 @@ class RayTrainGroup:
 
             actor_impl = VeOmniTrainRayActor
         else:
-            raise ValueError(f"Invalid backend: {backend}")
             from slime.backends.fsdp_utils import FSDPTrainRayActor
 
             actor_impl = FSDPTrainRayActor

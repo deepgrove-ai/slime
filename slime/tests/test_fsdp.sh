@@ -55,6 +55,12 @@ OPTIMIZER_ARGS=(
    --adam-beta2 0.98
 )
 
+WANDB_ARGS=(
+   --use-wandb
+   --wandb-project slime-fsdp
+   --wandb-group qwen3-0.6B-test
+)
+
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
 )
@@ -78,4 +84,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
-   ${SGLANG_ARGS[@]}
+   ${SGLANG_ARGS[@]} \
+   ${WANDB_ARGS[@]}

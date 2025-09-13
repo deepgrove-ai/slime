@@ -5,7 +5,7 @@ target "slime" {
   context    = "./"
   dockerfile = "Dockerfile.redmod"
   args       = {}
-  tags       = ["slime:latest"]
+  tags       = ["redmod-slime:latest"]
   secret = [
     "id=wandb_key,src=./secrets/wandb_key",
     "id=huggingface_key,src=./secrets/huggingface_key",

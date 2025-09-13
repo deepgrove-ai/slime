@@ -14,6 +14,8 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 
+from slime.utils.wandb_utils import init_wandb_secondary
+
 from .update_weight_utils import UpdateWeightFromTensor
 
 
@@ -34,6 +36,8 @@ class FSDPTrainRayActor(TrainRayActor):
         super().init(args, role, wandb_run_id, with_ref)
         self.args = args
         torch.manual_seed(args.seed)
+        if dist.get_rank() == 0:
+            init_wandb_secondary(args, wandb_run_id)
 
         # Serialize tokenizer/config loading across ranks to avoid HF cache race
         for i in range(dist.get_world_size()):
@@ -176,9 +180,9 @@ class FSDPTrainRayActor(TrainRayActor):
         padded_batches = self.pad_and_move_to_device(rollout_data)
 
         grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * world_size)
-        assert (
-            grad_accum > 0
-        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+        assert grad_accum > 0, (
+            f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+        )
 
         if self.ref_model is not None:
             self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
