@@ -57,11 +57,16 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-veomni
-   --wandb-group qwen3-0.6B-test
+   --wandb-group qwen3-0.6B-static-rollout
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
+)
+
+DEBUG_ARGS=(
+   # --save-debug-rollout-data ./test/debug_rollout_data
+   --load-debug-rollout-data ./test/debug_rollout_data
 )
 
 # launch the master node of ray in container
@@ -84,4 +89,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${WANDB_ARGS[@]}
+   ${WANDB_ARGS[@]} \
+   ${DEBUG_ARGS[@]}
