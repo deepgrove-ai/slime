@@ -25,15 +25,15 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-0.6B.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && cd .. && cd .. && pwd)"
+source "${SCRIPT_DIR}/scripts/models/qwen3-0.6B.sh"
 
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-0.6B
    --ref-load /root/Qwen3-0.6B_torch_dist
    --load /root/Qwen3-0.6B_slime/
-   --save /root/Qwen3-0.6B_slime/
+   # --save /root/Qwen3-0.6B_slime/
    # --save-interval 20
 )
 
@@ -132,7 +132,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${SGLANG_ARGS[@]} \

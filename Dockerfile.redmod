@@ -2,8 +2,8 @@ FROM zhuzilin/slime:latest AS slime
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-RUN rm -rf /root/Megatron-LM
-WORKDIR /root/Megatron-LM
+# RUN rm -rf /root/Megatron-LM
+# WORKDIR /root/Megatron-LM
 # COPY ./Megatron-LM /root/Megatron-LM
 
 # RUN pip install -e .
