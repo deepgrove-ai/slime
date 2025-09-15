@@ -70,6 +70,7 @@ DEBUG_ARGS=(
 )
 
 # launch the master node of ray in container
+
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
@@ -87,7 +88,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${DEBUG_ARGS[@]}
