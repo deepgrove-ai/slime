@@ -72,14 +72,14 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
 
-   # --micro-batch-size 1
-   --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --micro-batch-size 1
+   # --use-dynamic-batch-size
+   # --max-tokens-per-gpu 9216
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
-   --use-kl-loss
+   # --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
@@ -97,9 +97,9 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group qwen3-4B-test
+   --use-wandb
+   --wandb-project slime-dev
+   --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
 )
 
