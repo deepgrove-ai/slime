@@ -23,7 +23,7 @@ from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch
-from .loss import get_log_probs_and_entropy, loss_function
+from .loss import loss_function
 from .model_provider import get_model_provider_func
 
 if torch.version.hip:
@@ -69,6 +69,7 @@ def get_optimizer_param_scheduler(args, optimizer):
 
 def setup_model_and_optimizer(
     args,
+    role: str = "actor",
     no_wd_decay_cond=None,
     scale_lr_cond=None,
     lr_mult=1.0,
@@ -77,7 +78,7 @@ def setup_model_and_optimizer(
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
-    model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
+    model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
     with (
         CuMemAllocator.get_instance().use_memory_pool(tag="model")
@@ -161,7 +162,7 @@ def disable_forward_pre_hook(model_chunks, param_sync=True):
 
 
 @torch.no_grad()
-def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
+def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix=""):
     """Only do the forward pass and calculate the logprob."""
 
     # reset data iterator
@@ -194,7 +195,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
         )
 
         return output_tensor, partial(
-            get_log_probs_and_entropy,
+            f,
             args=args,
             unconcat_tokens=unconcat_tokens,
             total_lengths=total_lengths,
@@ -292,6 +293,7 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
                 "ref_log_probs",
                 "values",
                 "advantages",
+                "returns",
                 "rollout_log_probs",
             ],
         )
@@ -498,8 +500,8 @@ def save(iteration, model, optimizer, opt_param_scheduler):
         enable_forward_pre_hook(model)
 
 
-def initialize_model_and_optimizer(args):
-    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args)
+def initialize_model_and_optimizer(args, role: str = "actor"):
+    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     clear_memory()
     iteration, _ = load_checkpoint(
         model,

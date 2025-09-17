@@ -35,6 +35,7 @@ dependencies = [
     "torch_memory_saver",
     # Megatron-LM requires numpy==1.26.4 https://github.com/NVIDIA/Megatron-LM/issues/1563
     "numpy==1.26.4",
+    "sglang-router>=0.1.9",
 ]
 
 [dependency-groups]
