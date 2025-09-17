@@ -138,7 +138,9 @@ class FSDPTrainRayActor(TrainRayActor):
                     if "pixel_values" in batch:
                         model_args["pixel_values"] = batch["pixel_values"]
                     logits = self.model(**model_args).logits
-                batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"])
+                batch[f"{store_prefix}log_probs"] = gather_log_probs(
+                    logits, batch["tokens"], self.args.rollout_temperature
+                )
         return rollout_data
 
     def pad_and_move_to_device(self, rollout_data):
@@ -254,7 +256,9 @@ class FSDPTrainRayActor(TrainRayActor):
         for mbs_id, batch in enumerate(padded_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(input_ids=batch["tokens"]).logits
-            log_probs = gather_log_probs(logits, batch["tokens"])
+            log_probs = gather_log_probs(
+                    logits, batch["tokens"], self.args.rollout_temperature
+                )
 
             if self.args.advantage_estimator == "gspo":
                 raise NotImplementedError("implement GSPO")
@@ -351,8 +355,10 @@ class FSDPTrainRayActor(TrainRayActor):
             self.sleep(("model"))
 
 
-def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+
+def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, temperature: float) -> torch.Tensor:
     # log_probs: [B, T-1, V]; input_ids: [B, T]
+    logits = logits.div(temperature)
     pred_logits = logits[:, :-1]
     log_probs_all = torch.log_softmax(pred_logits, dim=-1)
     tgt = input_ids[:, 1:].contiguous()
