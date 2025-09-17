@@ -27,11 +27,11 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 16
+   --rollout-batch-size 2
    --n-samples-per-prompt 16
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
-   --global-batch-size 128
+   --global-batch-size 16
 )
 
 GRPO_ARGS=(
@@ -46,7 +46,7 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
-   --optimizer adam
+   --optimizer adamw
    --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
@@ -55,8 +55,8 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
-   --wandb-project slime-fsdp
+   # --use-wandb
+   --wandb-project slime-veomni
    --wandb-group qwen3-0.6B-static-rollout
 )
 
@@ -66,22 +66,25 @@ SGLANG_ARGS=(
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data
-   --load-debug-rollout-data ./test/debug_rollout_data
+   # --load-debug-rollout-data ./test/debug_rollout_data
+   --load-debug-rollout-data ./test/debug_rollout_data_1
 )
 
+
 # launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
+
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
         "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
-        "SLIME_BACKEND": "fsdp"
+        "SLIME_BACKEND": "veomni"
      }
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 1 \
    --colocate \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

@@ -10,7 +10,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 WORKDIR /root/slime
 # COPY pyproject.toml and setup.py and requirements.txt
-COPY pyproject.toml setup.py requirements.txt README.md LICENSE ./
+COPY pyproject.toml setup.py requirements.txt README.md LICENSE uv.lock ./
 COPY VeOmni/pyproject.toml VeOmni/setup.py VeOmni/requirements.txt VeOmni/README.md VeOmni/LICENSE /root/slime/VeOmni/
 COPY VeOmni/veomni/__init__.py /root/slime/VeOmni/veomni/__init__.py
 # install dependencies
@@ -20,7 +20,7 @@ ENV UV_PROJECT_ENVIRONMENT=/usr
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV UV_LINK_MODE=copy
 
-RUN uv sync --inexact --no-group docker-override
+RUN uv sync --inexact --no-group docker-override --no-group dev
 # RUN pip install -e .
 # copy the rest of the code
 
@@ -33,4 +33,5 @@ RUN --mount=type=secret,id=huggingface_key \
 
 COPY . .
 
+RUN uv sync --inexact --no-group docker-override --no-group dev
 # RUN uv pip install --no-deps --no-build-isolation --force-reinstall -e .

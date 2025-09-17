@@ -39,7 +39,15 @@ dependencies = [
 
 [dependency-groups]
 docker-override = ["sglang>=0.5.2"]
-dev = ["pytest>=7.0.0", "black>=23.0.0", "isort>=5.12.0", "ruff>=0.1.0"]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "ruff>=0.1.0",
+    "ipykernel",
+    "matplotlib",
+
+]
 
 
 [tool.hatch.build.targets.wheel]

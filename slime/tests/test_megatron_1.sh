@@ -45,11 +45,11 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 16
+   --rollout-batch-size 2
    --n-samples-per-prompt 16
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
-   --global-batch-size 128
+   --global-batch-size 16
 )
 
 PERF_ARGS=(
@@ -82,14 +82,13 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
+   # --use-wandb
    --wandb-project slime-megatron
    --wandb-group qwen3-0.6B-static-rollout
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.7
 )
 
 
@@ -98,8 +97,8 @@ MISC_ARGS=(
    --attention-dropout 0.0
    --hidden-dropout 0.0
    # should be good for model performance
-   --accumulate-allreduce-grads-in-fp32
-   --attention-softmax-in-fp32
+   # --accumulate-allreduce-grads-in-fp32
+   # --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
 )
@@ -107,11 +106,12 @@ MISC_ARGS=(
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data
    # --load-debug-rollout-data ./test/debug_rollout_data
+   --load-debug-rollout-data ./test/debug_rollout_data_1
 )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 1 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -126,7 +126,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 1 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \

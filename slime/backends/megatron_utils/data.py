@@ -122,9 +122,9 @@ class DataIterator:
                     indices = self.micro_batch_indices[self.offset]
                     batch[key] = [vals[i] for i in indices]
                 else:
-                    assert self.offset + self.micro_batch_size <= len(
-                        vals
-                    ), f"offset: {self.offset}, micro_batch_size: {self.micro_batch_size}, len(vals): {len(vals)}"
+                    assert self.offset + self.micro_batch_size <= len(vals), (
+                        f"offset: {self.offset}, micro_batch_size: {self.micro_batch_size}, len(vals): {len(vals)}"
+                    )
                     batch[key] = vals[self.offset : self.offset + self.micro_batch_size]
 
         if self.micro_batch_indices is not None:
@@ -228,10 +228,10 @@ def log_rollout_data(rollout_id, args, rollout_data):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
+        rollout_data["abs_advantages"] = [k.abs() for k in rollout_data["advantages"]]
         response_lengths = rollout_data["response_lengths"]
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
-
         for key, val in rollout_data.items():
             if key == "tokens" or key == "loss_masks" or key == "sample_indices":
                 continue
@@ -243,8 +243,15 @@ def log_rollout_data(rollout_id, args, rollout_data):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages"]:
-                        sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+                    sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+                    if key in [
+                        "log_probs",
+                        "ref_log_probs",
+                        "rollout_log_probs",
+                        "returns",
+                        "advantages",
+                        "abs_advantages",
+                    ]:
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
                         val = val.mean() * cp_size

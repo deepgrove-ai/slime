@@ -19,7 +19,7 @@ class VeOmniArgs:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
     adam_eps: float = 1e-8
-    warmup_ratio: float = 0.03
+    warmup_ratio: float = 0.0
 
     # FSDP specific
     # fsdp_wrap: str = "transformer_blocks"  # future use: auto wrap policy
@@ -31,7 +31,7 @@ class VeOmniArgs:
     # fsdp_backward_prefetch: bool = True
 
     enable_full_shard: bool = True
-    enable_mixed_precision: bool = False
+    enable_mixed_precision: bool = True
     enable_gradient_checkpointing: bool = False
     enable_fsdp_offload: bool = False
     enable_forward_prefetch: bool = False

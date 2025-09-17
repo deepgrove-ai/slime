@@ -32,6 +32,7 @@ from veomni.utils.arguments import ModelArguments, TrainingArguments
 from dataclasses import field
 from ray.actor import ActorProxy
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+from slime.backends.fsdp_utils.actor import gather_log_probs
 
 
 def data_parallel_size(args: VeOmnniFullArgs):
@@ -51,6 +52,19 @@ def data_parallel_size(args: VeOmnniFullArgs):
 class VeOmniInternalArgs:
     model: "ModelArguments" = field(default_factory=ModelArguments)
     train: "TrainingArguments" = field(default_factory=TrainingArguments)
+
+
+def dump_param_and_state_dtypes(model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for n, p in model.named_parameters():
+        key = f"param:{p.dtype}"
+        counts[key] = counts.get(key, 0) + p.numel()
+    for st in optimizer.state.values():
+        for k, v in st.items():
+            if isinstance(v, torch.Tensor):
+                key = f"opt_state:{k}:{v.dtype}"
+                counts[key] = counts.get(key, 0) + v.numel()
+    return counts
 
 
 class VeOmniTrainRayActor(TrainRayActor):
@@ -115,7 +129,7 @@ class VeOmniTrainRayActor(TrainRayActor):
             enable_gradient_checkpointing=args.enable_gradient_checkpointing,
             enable_fsdp_offload=args.enable_fsdp_offload,
             # For some reason this messes with grad norms
-            # basic_modules=self.model._no_split_modules,
+            basic_modules=self.model._no_split_modules,
             enable_reentrant=args.enable_reentrant,
             enable_forward_prefetch=args.enable_forward_prefetch,
         )
@@ -189,14 +203,17 @@ class VeOmniTrainRayActor(TrainRayActor):
         self,
         model_tag,
         padded_batches,
+        temperature,
         store_prefix="",
     ):
+        self.model.eval()
         rollout_data = {f"{store_prefix}log_probs": []}
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batch in padded_batches:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     logits = self.model(input_ids=batch["tokens"]).logits
-                batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"])
+                batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"], temperature)
+        self.model.train()
         return rollout_data
 
     def pad_and_move_to_device(self, rollout_data):
@@ -246,20 +263,33 @@ class VeOmniTrainRayActor(TrainRayActor):
         )
 
         if self.ref_model is not None:
-            self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
+            self.compute_log_prob(
+                "ref", padded_batches, store_prefix="ref_", temperature=self.args.rollout_temperature
+            )
 
-        self.compute_log_prob("actor", padded_batches)
+        self.compute_log_prob("actor", padded_batches, self.args.rollout_temperature)
 
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
             if self.args.advantage_estimator in ["grpo", "gspo"]:
                 batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
+                batch["abs_advantages"] = batch["advantages"].abs()
             else:
                 raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
         # TODO: finish log rollout_data
+        # assert len(padded_batches) * world_size * self.args.micro_batch_size == self.args.global_batch_size, (
+        #     f"{len(padded_batches)} * {world_size} * {self.args.micro_batch_size} != {self.args.global_batch_size}"
+        # )
         log_dict = {}
-        for key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward"]:
+        for key in [
+            "log_probs",
+            "ref_log_probs",
+            "advantages",
+            "abs_advantages",
+            "returns",
+            "rewards",
+        ]:
             if key not in padded_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
@@ -268,9 +298,30 @@ class VeOmniTrainRayActor(TrainRayActor):
                     val += per_sample_mean(batch[key], batch["loss_masks"]).item()
                 else:
                     val += sum(batch[key])
+
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
             log_dict[f"rollout/{key}"] = (val / len(padded_batches) / world_size).item()
+
+        for key in [
+            "raw_reward",
+            # "rollout_log_probs",
+            "response_lengths",
+        ]:
+            assert key in rollout_data, f"key {key} not in rollout_data"
+            val = torch.tensor([0.0], device=torch.cuda.current_device())
+
+            if isinstance(rollout_data[key], torch.Tensor):
+                val += per_sample_mean(rollout_data[key], rollout_data["loss_masks"]).item()
+            elif isinstance(rollout_data[key], list):
+                val += sum(rollout_data[key]) / len(rollout_data[key])
+            else:
+                val += sum(rollout_data[key])
+            dist.all_reduce(val, op=dist.ReduceOp.AVG)
+            log_dict[f"rollout/{key}"] = val.item()
         if dist.get_rank() == 0:
+            # save padded_batches
+            # torch.save(padded_batches, f"veomni_padded_batches_2.pt")
+
             print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
                 log_dict["rollout/step"] = (
@@ -289,7 +340,7 @@ class VeOmniTrainRayActor(TrainRayActor):
         for mbs_id, batch in enumerate(padded_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(input_ids=batch["tokens"]).logits
-            log_probs = gather_log_probs(logits, batch["tokens"])
+            log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
 
             if self.args.advantage_estimator == "gspo":
                 raise NotImplementedError("implement GSPO")
@@ -340,7 +391,8 @@ class VeOmniTrainRayActor(TrainRayActor):
 
             if (mbs_id + 1) % grad_accum == 0:
                 # TODO: check if the grad norm is global grad norm.
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+                grad_norm = self.model.clip_grad_norm_(self.args.clip_grad)
+                # grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
@@ -384,15 +436,6 @@ class VeOmniTrainRayActor(TrainRayActor):
         if self.args.offload:
             # TODO: don't wake up here
             self.sleep(("model"))
-
-
-def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
-    # log_probs: [B, T-1, V]; input_ids: [B, T]
-    pred_logits = logits[:, :-1]
-    log_probs_all = torch.log_softmax(pred_logits, dim=-1)
-    tgt = input_ids[:, 1:].contiguous()
-    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-    return log_probs
 
 
 def per_sample_mean(x, loss_mask):

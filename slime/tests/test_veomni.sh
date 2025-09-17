@@ -62,11 +62,12 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
+   --sglang-mem-fraction-static 0.7
 )
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data
-   --load-debug-rollout-data ./test/debug_rollout_data
+   # --load-debug-rollout-data ./test/debug_rollout_data
 )
 
 # launch the master node of ray in container
