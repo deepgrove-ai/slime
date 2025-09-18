@@ -16,9 +16,11 @@ from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.wandb_utils import init_wandb_secondary
 from slime.utils.timer import Timer, timer
 
+from .update_weight_utils import UpdateWeightFromTensor
+from slime.utils.logging import configure_logging
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from .update_weight_utils import UpdateWeightFromTensor
+logger = configure_logging(__name__)
 
 
 class FSDPTrainRayActor(TrainRayActor):
@@ -34,6 +36,39 @@ class FSDPTrainRayActor(TrainRayActor):
       * For small models this is fine; for larger models consider sharded state_dict type.
     """
 
+    def init_model(self, args):
+        with torch.device(f"cuda:{torch.cuda.current_device()}"):
+            model = AutoModelForCausalLM.from_pretrained(
+                args.hf_checkpoint,
+                trust_remote_code=True,
+            )
+        if args.gradient_checkpointing:
+            model.gradient_checkpointing_enable()
+        auto_wrap_policy = None
+
+        model = FSDP(
+            model,
+            auto_wrap_policy=auto_wrap_policy,
+            device_id=torch.cuda.current_device(),
+            use_orig_params=True,
+            sharding_strategy=ShardingStrategy[args.fsdp_sharding_strategy],
+            cpu_offload=args.fsdp_cpu_offload,
+            forward_prefetch=args.fsdp_forward_prefetch,
+            backward_prefetch=args.fsdp_backward_prefetch,
+            limit_all_gathers=args.fsdp_limit_all_gathers,
+        )
+        return model
+
+    def init_optimizer(self, args, model: torch.nn.Module) -> torch.optim.Optimizer:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.lr,
+            betas=(args.adam_beta1, args.adam_beta2),
+            eps=args.adam_eps,
+            weight_decay=args.weight_decay,
+        )
+        return optimizer
+
     def init(self, args, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
 
@@ -42,8 +77,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.args = args
         torch.manual_seed(args.seed)
-        if dist.get_rank() == 0:
-            init_wandb_secondary(args, wandb_run_id)
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -55,38 +88,12 @@ class FSDPTrainRayActor(TrainRayActor):
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
         # Load model
-        with torch.device(f"cuda:{torch.cuda.current_device()}"):
-            model = AutoModelForCausalLM.from_pretrained(
-                self.args.hf_checkpoint,
-                trust_remote_code=True,
-            )
-        model.train()
-
-        if args.gradient_checkpointing:
-            model.gradient_checkpointing_enable()
+        self.model = self.init_model(args)
+        self.model.train()
 
         # TODO: set correct auto_wrap_policy
-        auto_wrap_policy = None
 
-        self.model = FSDP(
-            model,
-            auto_wrap_policy=auto_wrap_policy,
-            device_id=torch.cuda.current_device(),
-            use_orig_params=True,
-            sharding_strategy=ShardingStrategy[self.args.fsdp_sharding_strategy],
-            cpu_offload=self.args.fsdp_cpu_offload,
-            forward_prefetch=self.args.fsdp_forward_prefetch,
-            backward_prefetch=self.args.fsdp_backward_prefetch,
-            limit_all_gathers=self.args.fsdp_limit_all_gathers,
-        )
-
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=args.lr,
-            betas=(args.adam_beta1, args.adam_beta2),
-            eps=args.adam_eps,
-            weight_decay=args.weight_decay,
-        )
+        self.optimizer = self.init_optimizer(args, self.model)
 
         # TODO: load
 
@@ -265,13 +272,48 @@ class FSDPTrainRayActor(TrainRayActor):
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             for batch in padded_batches:
-                if isinstance(batch[key], torch.Tensor):
-                    val += per_sample_mean(batch[key], batch["loss_masks"]).item()
+                data = batch[key]
+                batch_mask = batch["loss_masks"]
+                if isinstance(data, torch.Tensor):
+                    # check that first dim matches
+                    assert data.shape[0] == batch_mask.shape[0], f"data.shape[0] != batch['loss_masks'].shape[0]"
+                    # If this is an output token stat, it should be [batch, seq_len]
+                    if data.shape[1] == batch_mask.shape[1]:
+                        val += per_sample_mean(data, batch_mask).item()
+                    else:
+                        # Otherwise take the mean
+                        val += data.mean().item()
                 else:
-                    val += sum(batch[key])
+                    val += sum(data)
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
             log_dict[f"rollout/{key}"] = (val / len(padded_batches) / world_size).item()
+        for key in [
+            "raw_reward",
+            "rollout_log_probs",
+            "response_lengths",
+        ]:
+            assert key in rollout_data, f"key {key} not in rollout_data"
+            val = torch.tensor([0.0], device=torch.cuda.current_device())
+            data = rollout_data[key]
+            batch_mask = rollout_data["loss_masks"]
 
+            if isinstance(data, list):
+                data = torch.tensor(data, device="cpu")
+
+            if isinstance(data, torch.Tensor):
+                # check that first dim matches
+                assert data.shape[0] == batch_mask.shape[0], f"{data.shape[0]=} != {batch_mask.shape[0]=}"
+                # If this is an output token stat, it should be [batch, seq_len]
+                if data.shape[1] == batch_mask.shape[1]:
+                    val += per_sample_mean(data, batch_mask).item()
+                else:
+                    # Otherwise take the mean
+                    val += data.mean().item()
+            else:
+                logger.warning(f"Unsupported type: {key}: {type(data)}")
+                val += sum(data)
+            dist.all_reduce(val, op=dist.ReduceOp.AVG)
+            log_dict[f"rollout/{key}"] = val.item()
         if dist.get_rank() == 0:
             print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:

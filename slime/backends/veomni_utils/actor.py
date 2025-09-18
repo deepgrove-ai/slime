@@ -34,6 +34,8 @@ from ray.actor import ActorProxy
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.backends.fsdp_utils.actor import gather_log_probs
 
+from slime.backends.fsdp_utils.actor import FSDPTrainRayActor
+
 
 def data_parallel_size(args: VeOmnniFullArgs):
     return (
@@ -67,7 +69,7 @@ def dump_param_and_state_dtypes(model: torch.nn.Module, optimizer: torch.optim.O
     return counts
 
 
-class VeOmniTrainRayActor(TrainRayActor):
+class VeOmniTrainRayActor(FSDPTrainRayActor):
     """Simplified TrainRayActor for pure HF+FSDP training.
 
     Responsibilities:
@@ -80,9 +82,7 @@ class VeOmniTrainRayActor(TrainRayActor):
       * For small models this is fine; for larger models consider sharded state_dict type.
     """
 
-    def init(self, args: VeOmnniFullArgs, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
-        super().init(args, role, wandb_run_id, with_ref)
-        self.args = args
+    def init_model(self, args: VeOmnniFullArgs):
         if args.data_parallel_shard_size == -1:
             args.data_parallel_shard_size = data_parallel_size(args) // args.data_parallel_replicate_size
         assert args.data_parallel_shard_size > 0, "data_parallel_shard_size should be greater than 0."
@@ -97,13 +97,8 @@ class VeOmniTrainRayActor(TrainRayActor):
             ulysses_size=args.ulysses_parallel_size,
             dp_mode=args.data_parallel_mode,
         )
-        # TODO: Fix global rank stuffs for when colocate is disabled
-        if dist.get_rank() == 0:
-            init_wandb_secondary(args, wandb_run_id)
-
-        torch.manual_seed(args.seed)
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
-            self.model = build_foundation_model(
+            model = build_foundation_model(
                 config_path=args.hf_checkpoint,
                 quantize=False,  # Student model quantization
                 weights_path=args.hf_checkpoint,
@@ -113,15 +108,11 @@ class VeOmniTrainRayActor(TrainRayActor):
                 # init_device=args.train.init_device,
                 # force_use_huggingface=args.model.force_use_huggingface,
             )
-        self.hf_config = self.model.config
-        self.tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-
-        get_optimizer_pre_hook = getattr(self.model, "get_optimizer_pre_hook", None)
-        basic_modules = self.model._no_split_modules if self.model._no_split_modules is not None else []
+        basic_modules = model._no_split_modules if model._no_split_modules is not None else []
         if isinstance(args.basic_modules, list):
             basic_modules.extend(args.basic_modules)
-        self.model = build_parallelize_model(
-            self.model,
+        model = build_parallelize_model(
+            model,
             # init_device=args.train.init_device,
             weights_path=args.hf_checkpoint,
             enable_full_shard=args.enable_full_shard,
@@ -129,23 +120,10 @@ class VeOmniTrainRayActor(TrainRayActor):
             enable_gradient_checkpointing=args.enable_gradient_checkpointing,
             enable_fsdp_offload=args.enable_fsdp_offload,
             # For some reason this messes with grad norms
-            basic_modules=self.model._no_split_modules,
+            basic_modules=model._no_split_modules,
             enable_reentrant=args.enable_reentrant,
             enable_forward_prefetch=args.enable_forward_prefetch,
         )
-
-        self.optimizer = build_optimizer(
-            self.model,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            betas=(args.adam_beta1, args.adam_beta2),
-            eps=args.adam_eps,
-            fused=True,
-            optimizer_type=args.optimizer,
-        )
-        if get_optimizer_pre_hook is not None:
-            optimizer_pre_hook = get_optimizer_pre_hook(self.model, self.hf_config, args.data_parallel_mode)
-            self.optimizer.register_step_pre_hook(optimizer_pre_hook)
 
         assert not args.enable_activation_offload, "Activation offload is not supported yet."
 
@@ -154,290 +132,21 @@ class VeOmniTrainRayActor(TrainRayActor):
         #     args.enable_gradient_checkpointing,
         #     args.activation_gpu_limit,
         # )
-        self.model.train()
-        # Load model
+        return model
 
-        self.ref_model = None
-        # TODO: support ref model
-        if with_ref:
-            raise NotImplementedError()
+    def init_optimizer(self, args: VeOmnniFullArgs, model: torch.nn.Module):
+        get_optimizer_pre_hook = getattr(model, "get_optimizer_pre_hook", None)
 
-        self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
-
-        if self.args.offload:
-            self.sleep(("model"))
-
-        Timer().start("train_wait")
-        self.global_step = 0
-        self.micro_step = 0
-        return 0
-
-    def sleep(self, tags):
-        if not getattr(self.args, "offload", False):
-            return
-        if torch_memory_saver is not None:
-            torch_memory_saver.pause()
-
-    def wake_up(self, tags):
-        if not getattr(self.args, "offload", False):
-            return
-        if torch_memory_saver is not None:
-            torch_memory_saver.resume()
-
-    def save_model(self, iteration, with_optimizer=True):
-        if self.args.debug_rollout_only:
-            return
-
-        raise NotImplementedError()
-
-    def connect_rollout_engines(self, rollout_engines: list[ActorProxy[SGLangEngine]], rollout_engine_lock):
-        self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
-        dist.barrier(group=get_gloo_group())
-
-    def compute_log_prob(
-        self,
-        model_tag,
-        padded_batches,
-        temperature,
-        store_prefix="",
-    ):
-        self.model.eval()
-        rollout_data = {f"{store_prefix}log_probs": []}
-        with timer(f"{store_prefix}log_probs") and torch.no_grad():
-            for batch in padded_batches:
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = self.model(input_ids=batch["tokens"]).logits
-                batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"], temperature)
-        self.model.train()
-        return rollout_data
-
-    def pad_and_move_to_device(self, rollout_data):
-        tokens = rollout_data["tokens"]
-        loss_masks = rollout_data["loss_masks"]
-
-        padded_batches = []
-        for i in range(0, len(tokens), self.args.micro_batch_size):
-            batch_tokens = tokens[i : i + self.args.micro_batch_size]
-            batch_loss_masks = loss_masks[i : i + self.args.micro_batch_size]
-            max_len = max(len(t) for t in batch_tokens)
-            padded_tokens = [t + [self.tokenizer.pad_token_id] * (max_len - len(t)) for t in batch_tokens]
-            padded_loss_masks = [
-                # -1 because its the loss mask for logprob
-                [0] * (len(t) - len(l) - 1) + l + [0] * (max_len - len(t))
-                for l, t in zip(batch_loss_masks, batch_tokens)
-            ]
-            padded_batches.append(
-                {
-                    "tokens": torch.tensor(padded_tokens, dtype=torch.long, device=torch.cuda.current_device()),
-                    "loss_masks": torch.tensor(padded_loss_masks, dtype=torch.int, device=torch.cuda.current_device()),
-                    "rewards": torch.tensor(
-                        rollout_data["rewards"][i : i + self.args.micro_batch_size],
-                        dtype=torch.float,
-                        device=torch.cuda.current_device(),
-                    ),
-                    "raw_reward": rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
-                }
-            )
-        return padded_batches
-
-    def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]
-        Timer().end("train_wait")
-
-        if self.args.offload:
-            self.wake_up(("model"))
-
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-
-        rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
-        padded_batches = self.pad_and_move_to_device(rollout_data)
-
-        grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * world_size)
-        assert grad_accum > 0, (
-            f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+        optimizer = build_optimizer(
+            model,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(args.adam_beta1, args.adam_beta2),
+            eps=args.adam_eps,
+            fused=True,
+            optimizer_type=args.optimizer,
         )
-
-        if self.ref_model is not None:
-            self.compute_log_prob(
-                "ref", padded_batches, store_prefix="ref_", temperature=self.args.rollout_temperature
-            )
-
-        self.compute_log_prob("actor", padded_batches, self.args.rollout_temperature)
-
-        # TODO: compute rewards and adv for t
-        for batch in padded_batches:
-            if self.args.advantage_estimator in ["grpo", "gspo"]:
-                batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
-                batch["abs_advantages"] = batch["advantages"].abs()
-            else:
-                raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
-
-        # TODO: finish log rollout_data
-        # assert len(padded_batches) * world_size * self.args.micro_batch_size == self.args.global_batch_size, (
-        #     f"{len(padded_batches)} * {world_size} * {self.args.micro_batch_size} != {self.args.global_batch_size}"
-        # )
-        log_dict = {}
-        for key in [
-            "log_probs",
-            "ref_log_probs",
-            "advantages",
-            "abs_advantages",
-            "returns",
-            "rewards",
-        ]:
-            if key not in padded_batches[0]:
-                continue
-            val = torch.tensor([0.0], device=torch.cuda.current_device())
-            for batch in padded_batches:
-                if isinstance(batch[key], torch.Tensor):
-                    val += per_sample_mean(batch[key], batch["loss_masks"]).item()
-                else:
-                    val += sum(batch[key])
-
-            dist.all_reduce(val, op=dist.ReduceOp.SUM)
-            log_dict[f"rollout/{key}"] = (val / len(padded_batches) / world_size).item()
-
-        for key in [
-            "raw_reward",
-            # "rollout_log_probs",
-            "response_lengths",
-        ]:
-            assert key in rollout_data, f"key {key} not in rollout_data"
-            val = torch.tensor([0.0], device=torch.cuda.current_device())
-
-            if isinstance(rollout_data[key], torch.Tensor):
-                val += per_sample_mean(rollout_data[key], rollout_data["loss_masks"]).item()
-            elif isinstance(rollout_data[key], list):
-                val += sum(rollout_data[key]) / len(rollout_data[key])
-            else:
-                val += sum(rollout_data[key])
-            dist.all_reduce(val, op=dist.ReduceOp.AVG)
-            log_dict[f"rollout/{key}"] = val.item()
-        if dist.get_rank() == 0:
-            # save padded_batches
-            # torch.save(padded_batches, f"veomni_padded_batches_2.pt")
-
-            print(f"rollout {rollout_id}: {log_dict}")
-            if self.args.use_wandb:
-                log_dict["rollout/step"] = (
-                    rollout_id
-                    if not self.args.wandb_always_use_train_step
-                    else rollout_id
-                    * self.args.rollout_batch_size
-                    * self.args.n_samples_per_prompt
-                    // self.args.global_batch_size
-                )
-                wandb.log(log_dict)
-
-        reported_accum: dict[str, list[torch.Tensor]] = {}
-        self.optimizer.zero_grad(set_to_none=True)
-
-        for mbs_id, batch in enumerate(padded_batches):
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = self.model(input_ids=batch["tokens"]).logits
-            log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
-
-            if self.args.advantage_estimator == "gspo":
-                raise NotImplementedError("implement GSPO")
-
-            ppo_kl = batch["log_probs"] - log_probs
-            pg_loss, pg_clipfrac = compute_policy_loss(
-                ppo_kl, batch["advantages"], self.args.eps_clip, self.args.eps_clip_high
-            )
-
-            pg_loss = per_sample_mean(pg_loss, batch["loss_masks"])
-            pg_clipfrac = per_sample_mean(pg_clipfrac, batch["loss_masks"])
-            ppo_kl = per_sample_mean(ppo_kl.abs(), batch["loss_masks"])
-
-            loss = pg_loss
-
-            if self.args.use_tis:
-                raise NotImplementedError("implement TIS")
-
-            if self.args.entropy_coef != 0:
-                raise NotImplementedError("implement entropy bonus")
-
-            if self.args.use_kl_loss:
-                kl = compute_approx_kl(
-                    log_probs,
-                    batch["ref_log_probs"],
-                    kl_loss_type=self.args.kl_loss_type,
-                )
-                kl_loss = per_sample_mean(kl, batch["loss_masks"])
-
-                loss = loss + self.args.kl_loss_coef * kl_loss
-
-            reported = {
-                "loss": pg_loss.detach(),
-                "pg_loss": pg_loss.detach(),
-                "pg_clipfrac": pg_clipfrac.detach(),
-                "ppo_kl": ppo_kl.detach(),
-            }
-            if self.args.use_kl_loss:
-                reported["kl_loss"] = kl_loss.detach()
-
-            # Scale loss for gradient accumulation
-            loss = loss / grad_accum
-            loss.backward()
-
-            # Accumulate reported metrics (store tensors for later mean)
-            for k, v in reported.items():
-                reported_accum.setdefault(k, []).append(v)
-
-            if (mbs_id + 1) % grad_accum == 0:
-                # TODO: check if the grad norm is global grad norm.
-                grad_norm = self.model.clip_grad_norm_(self.args.clip_grad)
-                # grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
-                self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none=True)
-                # Aggregate logs
-                aggregated = {k: torch.stack(v).mean().item() for k, v in reported_accum.items()}
-                # TODO: change this, this is slow.
-                reduced_aggregated = [None] * world_size
-                dist.all_gather_object(reduced_aggregated, aggregated)
-                # Mean across dp ranks
-                aggregated = {}
-                for k in reported_accum.keys():
-                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
-                reported_accum = {}
-                if dist.get_rank() == 0:
-                    log_dict = {
-                        f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
-                    }
-                    log_dict["train/grad_norm"] = grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
-                    for gid, group in enumerate(self.optimizer.param_groups):
-                        if "lr" in group:
-                            log_dict[f"train/lr-pg_{gid}"] = group["lr"]
-                    print(f"step {self.global_step}: {log_dict}")
-                    if self.args.use_wandb:
-                        log_dict["train/step"] = self.global_step
-                        wandb.log(log_dict)
-                self.global_step += 1
-
-        Timer().start("train_wait")
-        return
-
-    def update_weights(self):  # type: ignore[override]
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        if self.args.offload:
-            # TODO: don't wake up here
-            self.wake_up(("model"))
-
-        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
-            self.weight_updator.update_weights()
-
-        if self.args.offload:
-            # TODO: don't wake up here
-            self.sleep(("model"))
-
-
-def per_sample_mean(x, loss_mask):
-    # TODO: impl per token loss
-    return ((x * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp_min(1)).mean()
+        if get_optimizer_pre_hook is not None:
+            optimizer_pre_hook = get_optimizer_pre_hook(model, self.hf_config, args.data_parallel_mode)
+            optimizer.register_step_pre_hook(optimizer_pre_hook)
+        return optimizer
