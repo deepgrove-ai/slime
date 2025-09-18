@@ -78,4 +78,6 @@ def configure_logging(
         console_handler.setFormatter(formatter)
 
     logger.addHandler(console_handler)
-    return _PrefixAdapter(logger)
+    return logger
+    # TODO: add rank in prefix
+    # return _PrefixAdapter(logger)
