@@ -1,9 +1,9 @@
 import gc
 import torch
 import torch.distributed as dist
-from logging import getLogger
+from .logging import configure_logging
 
-logger = getLogger(__name__)
+logger = configure_logging(__name__)
 
 
 def clear_memory():
