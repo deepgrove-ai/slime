@@ -200,6 +200,12 @@ class FSDPTrainRayActor(TrainRayActor):
                 [0] * (len(t) - len(l) - 1) + l + [0] * (max_len - len(t))
                 for l, t in zip(batch_loss_masks, batch_tokens)
             ]
+
+            batch_rollout_log_probs = rollout_data["rollout_log_probs"][i : i + self.args.micro_batch_size]
+            padded_rollout_log_probs = [
+                [0] * (len(t) - len(l) - 1) + l + [0] * (max_len - len(t))
+                for l, t in zip(batch_rollout_log_probs, batch_tokens)
+            ]
             batch = {
                 "tokens": torch.tensor(padded_tokens, dtype=torch.long, device=torch.cuda.current_device()),
                 "loss_masks": torch.tensor(padded_loss_masks, dtype=torch.int, device=torch.cuda.current_device()),
@@ -209,6 +215,11 @@ class FSDPTrainRayActor(TrainRayActor):
                     device=torch.cuda.current_device(),
                 ),
                 "raw_reward": rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
+                "rollout_log_probs": torch.tensor(
+                    padded_rollout_log_probs,
+                    dtype=torch.float,
+                    device=torch.cuda.current_device(),
+                ),
             }
 
             if self.args.multimodal_keys:
@@ -235,6 +246,17 @@ class FSDPTrainRayActor(TrainRayActor):
 
             padded_batches.append(batch)
         return padded_batches
+
+    @classmethod
+    def check_logprobs(cls, logprobs: torch.Tensor, loss_masks: torch.Tensor, rollout_log_probs: torch.Tensor):
+        assert logprobs.shape == loss_masks.shape == rollout_log_probs.shape, (
+            f"{logprobs.shape=} != {loss_masks.shape=} != {rollout_log_probs.shape=}"
+        )
+        with torch.no_grad():
+            l2_dist = torch.nn.functional.mse_loss(logprobs * loss_masks, rollout_log_probs * loss_masks)
+        if l2_dist > 1e-3:
+            logger.warning(f"L2 distance between logprobs and rollout_log_probs is {l2_dist:.4f}")
+        return l2_dist
 
     def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]
         Timer().end("train_wait")
@@ -267,7 +289,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         log_dict = {}
 
-        for key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward"]:
+        for key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward", "rollout_log_probs"]:
             if key not in padded_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
@@ -276,7 +298,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 batch_mask = batch["loss_masks"]
                 if isinstance(data, torch.Tensor):
                     # check that first dim matches
-                    assert data.shape[0] == batch_mask.shape[0], f"data.shape[0] != batch['loss_masks'].shape[0]"
+                    assert data.shape[0] == batch_mask.shape[0], f"{data.shape[0]=} != {batch_mask.shape[0]=}"
                     # If this is an output token stat, it should be [batch, seq_len]
                     if data.shape[1] == batch_mask.shape[1]:
                         val += per_sample_mean(data, batch_mask).item()
@@ -289,7 +311,7 @@ class FSDPTrainRayActor(TrainRayActor):
             log_dict[f"rollout/{key}"] = (val / len(padded_batches) / world_size).item()
         for key in [
             "raw_reward",
-            "rollout_log_probs",
+            # "rollout_log_probs",
             "response_lengths",
         ]:
             assert key in rollout_data, f"key {key} not in rollout_data"
