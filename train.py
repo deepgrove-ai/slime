@@ -4,6 +4,7 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGH
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
+import time
 
 
 def train(args):
@@ -68,6 +69,8 @@ def train(args):
 
         if args.offload:
             ray.get(rollout_manager.offload.remote())
+        # Wait 500ms for the offload to finish
+        time.sleep(0.5)
 
         if args.use_critic:
             critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)

@@ -38,6 +38,7 @@ class RolloutManager:
         self.data_source = RolloutDataSourceWithBuffer(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
+        # Default slime.rollout.sglang_rollout.generate_rollout
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:

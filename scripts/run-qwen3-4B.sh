@@ -147,6 +147,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
-   ${EVAL_ARGS[@]} \
+   # ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
