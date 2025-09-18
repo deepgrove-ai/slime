@@ -172,7 +172,6 @@ def compute_advantages_and_returns(args, rollout_data):
                 ]
             )
         )
-        print(f"returns: {returns}")
 
     elif args.advantage_estimator == "reinforce_plus_plus":
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
@@ -365,7 +364,6 @@ def value_loss_function(args, batch, logits, sum_of_sample_mean):
     )
     values = torch.cat(values["values"], dim=0)
 
-    print(f"returns: {batch['returns']}")
     returns = torch.cat(batch["returns"], dim=0)
 
     values_clipped = old_values + (values - old_values).clamp(-args.value_clip, args.value_clip)
