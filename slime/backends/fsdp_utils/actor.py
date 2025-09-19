@@ -15,6 +15,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.wandb_utils import init_wandb_secondary
 from slime.utils.timer import Timer, timer
+from slime.utils.memory_utils import clear_memory, print_memory
 
 from .update_weight_utils import UpdateWeightFromTensor
 from slime.utils.logging import configure_logging
@@ -35,6 +36,10 @@ class FSDPTrainRayActor(TrainRayActor):
       * Rank0 gathers state_dict (full) and broadcasts tensor-by-tensor.
       * For small models this is fine; for larger models consider sharded state_dict type.
     """
+
+    def __init__(self, world_size, rank, master_addr, master_port, wandb_run_id):
+        torch_memory_saver.hook_mode = "torch"
+        super().__init__(world_size, rank, master_addr, master_port, wandb_run_id)
 
     def init_model(self, args):
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
@@ -74,6 +79,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if dist.get_rank() == 0:
             init_wandb_secondary(args, wandb_run_id)
+            world_size = dist.get_world_size()
+            grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * world_size)
+            print(f"{grad_accum=},{self.args.global_batch_size=},{self.args.micro_batch_size=},{world_size=}")
 
         self.args = args
         torch.manual_seed(args.seed)
@@ -115,17 +123,30 @@ class FSDPTrainRayActor(TrainRayActor):
         self.micro_step = 0
         return 0
 
+    @timer
     def sleep(self, tags):
-        if not getattr(self.args, "offload", False):
-            return
-        if torch_memory_saver is not None:
-            torch_memory_saver.pause()
+        assert self.args.offload
+        assert "model" in tags
+        if isinstance(tags, str):
+            tags = (tags,)
 
+        clear_memory()
+        print_memory(f"before offload model")
+        assert torch_memory_saver is not None
+        torch_memory_saver.pause()
+        print_memory(f"after offload model")
+
+    @timer
     def wake_up(self, tags):
-        if not getattr(self.args, "offload", False):
-            return
-        if torch_memory_saver is not None:
-            torch_memory_saver.resume()
+        assert self.args.offload
+        print_memory("before wake_up model")
+
+        if isinstance(tags, str):
+            tags = (tags,)
+
+        assert torch_memory_saver is not None
+        torch_memory_saver.resume()
+        print_memory("after wake_up model")
 
     def save_model(self, iteration):
         if self.args.debug_rollout_only:
@@ -254,7 +275,7 @@ class FSDPTrainRayActor(TrainRayActor):
         )
         with torch.no_grad():
             l2_dist = torch.nn.functional.mse_loss(logprobs * loss_masks, rollout_log_probs * loss_masks)
-        if l2_dist > 1e-3:
+        if l2_dist > 5e-3:
             logger.warning(f"L2 distance between logprobs and rollout_log_probs is {l2_dist:.4f}")
         return l2_dist
 
@@ -271,6 +292,7 @@ class FSDPTrainRayActor(TrainRayActor):
         padded_batches = self.pad_and_move_to_device(rollout_data)
 
         grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * world_size)
+        print(f"{grad_accum=},{self.args.global_batch_size=},{self.args.micro_batch_size=},{world_size=}")
         assert grad_accum > 0, (
             f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
         )
@@ -278,10 +300,14 @@ class FSDPTrainRayActor(TrainRayActor):
         if "ref" in self.weights:
             self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
 
+        print("before compute log probs actor")
         self.compute_log_prob("actor", padded_batches)
+        print("compute log probs done")
 
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
+            # check log_probs
+            self.check_logprobs(batch["log_probs"], batch["loss_masks"], batch["rollout_log_probs"])
             if self.args.advantage_estimator in ["grpo", "gspo"]:
                 batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
             else:
@@ -317,20 +343,9 @@ class FSDPTrainRayActor(TrainRayActor):
             assert key in rollout_data, f"key {key} not in rollout_data"
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             data = rollout_data[key]
-            batch_mask = rollout_data["loss_masks"]
 
             if isinstance(data, list):
-                data = torch.tensor(data, device="cpu")
-
-            if isinstance(data, torch.Tensor):
-                # check that first dim matches
-                assert data.shape[0] == batch_mask.shape[0], f"{data.shape[0]=} != {batch_mask.shape[0]=}"
-                # If this is an output token stat, it should be [batch, seq_len]
-                if data.shape[1] == batch_mask.shape[1]:
-                    val += per_sample_mean(data, batch_mask).item()
-                else:
-                    # Otherwise take the mean
-                    val += data.mean().item()
+                val += sum(data) / len(data)
             else:
                 logger.warning(f"Unsupported type: {key}: {type(data)}")
                 val += sum(data)
@@ -349,113 +364,119 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
                 wandb.log(log_dict)
 
-        reported_accum: dict[str, list[torch.Tensor]] = {}
-        self.optimizer.zero_grad(set_to_none=True)
-        for mbs_id, batch in enumerate(padded_batches):
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = self.model(input_ids=batch["tokens"]).logits
-            log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
+        print_memory("before train")
+        with timer("train"):
+            reported_accum: dict[str, list[torch.Tensor]] = {}
+            self.optimizer.zero_grad(set_to_none=True)
+            for mbs_id, batch in enumerate(padded_batches):
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    logits = self.model(input_ids=batch["tokens"]).logits
+                log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
 
-            if self.args.advantage_estimator == "gspo":
-                raise NotImplementedError("implement GSPO")
+                if self.args.advantage_estimator == "gspo":
+                    raise NotImplementedError("implement GSPO")
 
-            ppo_kl = batch["log_probs"] - log_probs
-            pg_loss, pg_clipfrac = compute_policy_loss(
-                ppo_kl, batch["advantages"], self.args.eps_clip, self.args.eps_clip_high
-            )
-
-            pg_loss = per_sample_mean(pg_loss, batch["loss_masks"])
-            pg_clipfrac = per_sample_mean(pg_clipfrac, batch["loss_masks"])
-            ppo_kl = per_sample_mean(ppo_kl.abs(), batch["loss_masks"])
-
-            loss = pg_loss
-
-            if self.args.use_tis:
-                raise NotImplementedError("implement TIS")
-
-            if self.args.entropy_coef != 0:
-                raise NotImplementedError("implement entropy bonus")
-
-            if self.args.use_kl_loss:
-                kl = compute_approx_kl(
-                    log_probs,
-                    batch["ref_log_probs"],
-                    kl_loss_type=self.args.kl_loss_type,
+                ppo_kl = batch["log_probs"] - log_probs
+                pg_loss, pg_clipfrac = compute_policy_loss(
+                    ppo_kl, batch["advantages"], self.args.eps_clip, self.args.eps_clip_high
                 )
-                kl_loss = per_sample_mean(kl, batch["loss_masks"])
 
-                loss = loss + self.args.kl_loss_coef * kl_loss
+                pg_loss = per_sample_mean(pg_loss, batch["loss_masks"])
+                pg_clipfrac = per_sample_mean(pg_clipfrac, batch["loss_masks"])
+                ppo_kl = per_sample_mean(ppo_kl.abs(), batch["loss_masks"])
 
-            # TODO: report entropy
+                loss = pg_loss
 
-            reported = {
-                "loss": loss.detach(),
-                "pg_loss": pg_loss.detach(),
-                "pg_clipfrac": pg_clipfrac.detach(),
-                "ppo_kl": ppo_kl.detach(),
-            }
+                if self.args.use_tis:
+                    raise NotImplementedError("implement TIS")
 
-            if self.args.use_kl_loss:
-                reported["kl_loss"] = kl_loss.detach()
+                if self.args.entropy_coef != 0:
+                    raise NotImplementedError("implement entropy bonus")
 
-            loss = loss / grad_accum
-            loss.backward()
-
-            for k, v in reported.items():
-                reported_accum.setdefault(k, []).append(v)
-
-            if (mbs_id + 1) % grad_accum == 0:
-                # TODO: check if the grad norm is global grad norm.
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
-                self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none=True)
-                aggregated = {}
-                for k, v in reported_accum.items():
-                    if k in ["kl_loss"]:
-                        kl_values = torch.stack(v)
-                        aggregated[k] = (kl_values * self.args.micro_batch_size).sum().item()
-                    else:
-                        aggregated[k] = torch.stack(v).mean().item()
-                # TODO: change this, this is slow.
-                reduced_aggregated = [None] * world_size
-                dist.all_gather_object(reduced_aggregated, aggregated)
-                aggregated = {}
-                for k in reported_accum.keys():
-                    if k in ["kl_loss"]:
-                        total_kl = sum([r[k] for r in reduced_aggregated])
-                        aggregated[k] = total_kl / self.args.global_batch_size
-                    else:
-                        aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
-                reported_accum = {}
-                if dist.get_rank() == 0:
-                    log_dict = {
-                        f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
-                    }
-                    log_dict["train/grad_norm"] = grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
-
-                    for gid, group in enumerate(self.optimizer.param_groups):
-                        if "lr" in group:
-                            log_dict[f"train/lr-pg_{gid}"] = group["lr"]
-
-                    kl_info = ""
-                    if self.args.use_kl_loss and "kl_loss" in aggregated:
-                        kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
-
-                    print(
-                        f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
+                if self.args.use_kl_loss:
+                    kl = compute_approx_kl(
+                        log_probs,
+                        batch["ref_log_probs"],
+                        kl_loss_type=self.args.kl_loss_type,
                     )
-                    print(f"step {self.global_step} full: {log_dict}")
+                    kl_loss = per_sample_mean(kl, batch["loss_masks"])
 
-                    if self.args.use_wandb:
-                        log_dict["train/step"] = self.global_step
-                        wandb.log(log_dict)
-                self.global_step += 1
+                    loss = loss + self.args.kl_loss_coef * kl_loss
+
+                # TODO: report entropy
+
+                reported = {
+                    "loss": loss.detach(),
+                    "pg_loss": pg_loss.detach(),
+                    "pg_clipfrac": pg_clipfrac.detach(),
+                    "ppo_kl": ppo_kl.detach(),
+                }
+
+                if self.args.use_kl_loss:
+                    reported["kl_loss"] = kl_loss.detach()
+
+                loss = loss / grad_accum
+                loss.backward()
+
+                for k, v in reported.items():
+                    reported_accum.setdefault(k, []).append(v)
+
+                if (mbs_id + 1) % grad_accum == 0:
+                    # TODO: check if the grad norm is global grad norm.
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+                    self.optimizer.step()
+                    self.optimizer.zero_grad(set_to_none=True)
+                    aggregated = {}
+                    for k, v in reported_accum.items():
+                        if k in ["kl_loss"]:
+                            kl_values = torch.stack(v)
+                            aggregated[k] = (kl_values * self.args.micro_batch_size).sum().item()
+                        else:
+                            aggregated[k] = torch.stack(v).mean().item()
+                    # TODO: change this, this is slow.
+                    reduced_aggregated = [None] * world_size
+                    dist.all_gather_object(reduced_aggregated, aggregated)
+                    aggregated = {}
+                    for k in reported_accum.keys():
+                        if k in ["kl_loss"]:
+                            total_kl = sum([r[k] for r in reduced_aggregated])
+                            aggregated[k] = total_kl / self.args.global_batch_size
+                        else:
+                            aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
+                    reported_accum = {}
+                    if dist.get_rank() == 0:
+                        log_dict = {
+                            f"train/{k}": (val.item() if torch.is_tensor(val) else val)
+                            for k, val in aggregated.items()
+                        }
+                        log_dict["train/grad_norm"] = (
+                            grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
+                        )
+
+                        for gid, group in enumerate(self.optimizer.param_groups):
+                            if "lr" in group:
+                                log_dict[f"train/lr-pg_{gid}"] = group["lr"]
+
+                        kl_info = ""
+                        if self.args.use_kl_loss and "kl_loss" in aggregated:
+                            kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
+
+                        print(
+                            f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
+                        )
+                        print(f"step {self.global_step} full: {log_dict}")
+
+                        if self.args.use_wandb:
+                            log_dict["train/step"] = self.global_step
+                            wandb.log(log_dict)
+                    self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
+        log_perf_data(rollout_id, self.args)
 
         Timer().start("train_wait")
-        return
 
+    @timer
     def update_weights(self):  # type: ignore[override]
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
@@ -465,7 +486,9 @@ class FSDPTrainRayActor(TrainRayActor):
             self.wake_up(("model"))
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+            print_memory("before update_weights")
             self.weight_updator.update_weights()
+            print_memory("after update_weights")
 
         if self.args.offload:
             # TODO: don't wake up here
@@ -526,6 +549,28 @@ class FSDPTrainRayActor(TrainRayActor):
 
         finally:
             self.update_gpu_params_dict(current_weights)
+
+
+def log_perf_data(rollout_id, args):
+    timer_instance = Timer()
+    if dist.get_rank() == 0:
+        log_dict = {f"perf/{key}_time": val for key, val in timer_instance.log_dict().items()}
+
+        if "perf/train_wait_time" in log_dict and "perf/train_time" in log_dict:
+            total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_time"]
+            if total_time > 0:
+                log_dict["perf/total_train_time"] = total_time
+                log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
+
+        print(f"perf {rollout_id}: {log_dict}")
+        if args.use_wandb:
+            log_dict["rollout/step"] = (
+                rollout_id
+                if not args.wandb_always_use_train_step
+                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+            )
+            wandb.log(log_dict)
+    timer_instance.reset()
 
 
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:

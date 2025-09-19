@@ -52,13 +52,13 @@ def train(args):
         ray.get(actor_model.async_connect(critic_model))
 
     if args.offload:
-        ray.get(*ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])))
+        ray.get(ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])))
 
     # always update weight first so that sglang has the loaded weights from training.
     ray.get(actor_model.async_update_weights())
 
     if args.offload:
-        ray.get(*ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE])))
+        ray.get(ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE])))
 
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
@@ -71,7 +71,7 @@ def train(args):
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload:
-            offload = ray.get(*ray.get(rollout_manager.offload.remote()))
+            offload = ray.get(ray.get(rollout_manager.offload.remote()))
             logger.info(f"Offloaded {offload}")
 
         if args.use_critic:
@@ -95,12 +95,12 @@ def train(args):
             if args.use_critic:
                 ray.get(critic_model.async_offload())
 
-            ray.get(*ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])))
+            ray.get(ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])))
 
         ray.get(actor_model.async_update_weights())
 
         if args.offload:
-            ray.get(*ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE])))
+            ray.get(ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE])))
 
         if args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0

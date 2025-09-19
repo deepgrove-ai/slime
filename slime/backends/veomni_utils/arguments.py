@@ -32,9 +32,9 @@ class VeOmniArgs:
 
     enable_full_shard: bool = True
     enable_mixed_precision: bool = True
-    enable_gradient_checkpointing: bool = False
+    enable_gradient_checkpointing: bool = True
     enable_fsdp_offload: bool = False
-    enable_forward_prefetch: bool = False
+    enable_forward_prefetch: bool = True
     enable_reentrant: bool = False
 
     data_parallel_mode: str = field(

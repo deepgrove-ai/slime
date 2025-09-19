@@ -39,7 +39,8 @@ dependencies = [
 ]
 
 [dependency-groups]
-docker-override = ["sglang>=0.5.2"]
+# flash-attn==2.7.4.post1
+docker-override = ["sglang>=0.5.2", "flash-attn", "nvidia-ml-py>=13.580.65"]
 dev = [
     "pytest>=7.0.0",
     "black>=23.0.0",
@@ -52,7 +53,6 @@ dev = [
 
 
 [tool.hatch.build.targets.wheel]
-
 packages = ["slime", "slime_plugins"]
 
 [tool.hatch.build.targets.wheel.sources]
@@ -120,6 +120,7 @@ markers = [
 
 [tool.uv]
 
+no-build-isolation-package = ["flash-attn"]
 default-groups = ["dev", "docker-override"]
 
 [tool.uv.sources]

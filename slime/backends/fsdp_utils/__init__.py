@@ -2,6 +2,8 @@ import logging
 
 
 try:
+    from torch_memory_saver import torch_memory_saver
+
     _TORCH_MEMORY_SAVER_AVAILABLE = True
 except ImportError:
     logging.warning("torch_memory_saver is not installed, refer to : https://github.com/fzyzcjy/torch_memory_saver")
