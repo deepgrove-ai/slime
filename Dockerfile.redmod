@@ -11,7 +11,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 WORKDIR /root/slime
 # COPY pyproject.toml and setup.py and requirements.txt
 COPY pyproject.toml setup.py requirements.txt README.md LICENSE uv.lock ./
-COPY VeOmni/pyproject.toml VeOmni/setup.py VeOmni/requirements.txt VeOmni/README.md VeOmni/LICENSE /root/slime/VeOmni/
+COPY VeOmni/pyproject.toml VeOmni/README.md VeOmni/LICENSE /root/slime/VeOmni/
 COPY VeOmni/veomni/__init__.py /root/slime/VeOmni/veomni/__init__.py
 # install dependencies
 # ENV UV_SYSTEM_PYTHON=1
