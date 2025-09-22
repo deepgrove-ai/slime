@@ -292,7 +292,6 @@ class FSDPTrainRayActor(TrainRayActor):
         padded_batches = self.pad_and_move_to_device(rollout_data)
 
         grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * world_size)
-        print(f"{grad_accum=},{self.args.global_batch_size=},{self.args.micro_batch_size=},{world_size=}")
         assert grad_accum > 0, (
             f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
         )

@@ -32,7 +32,7 @@ class FSDPArgs:
     wandb_run_name: Optional[str] = None
 
     # Precision
-    gradient_checkpointing: bool = False
+    gradient_checkpointing: bool = True
 
     # YAML bookkeeping
     config: Optional[str] = None
