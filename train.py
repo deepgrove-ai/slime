@@ -4,7 +4,6 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGH
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
-import time
 from slime.utils.logging import configure_logging
 
 logger = configure_logging(__name__)

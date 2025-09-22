@@ -37,6 +37,9 @@ class VeOmniArgs:
     enable_forward_prefetch: bool = True
     enable_reentrant: bool = False
 
+    # Currently broken
+    compile: bool = False
+
     data_parallel_mode: str = field(
         default="fsdp1",
         metadata={"help": "Data parallel mode."},

@@ -28,8 +28,8 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-4B
+   --ref-load /root/Qwen3-4B
    #--hf-checkpoint /root/Qwen3-4B-FP8
-   # --ref-load /root/Qwen3-4B_torch_dist
    # --load /root/Qwen3-4B_slime/
    # --save /root/Qwen3-4B_slime/
    # --save-interval 20
@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data_256
-   # --load-debug-rollout-data ./test/debug_rollout_data_256
+   --load-debug-rollout-data ./test/debug_rollout_data_256
 )
 
 EVAL_ARGS=(
@@ -84,7 +84,7 @@ EVAL_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
-   # --use-kl-loss
+   --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00

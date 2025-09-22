@@ -19,7 +19,9 @@ from slime.utils.memory_utils import clear_memory, print_memory
 
 from .update_weight_utils import UpdateWeightFromTensor
 from slime.utils.logging import configure_logging
-from slime.utils.wandb_utils import init_wandb_secondary
+
+# TODO:
+# from torch.distributed.checkpoint.state_dict import get_state_dict
 
 logger = configure_logging(__name__)
 
@@ -122,6 +124,10 @@ class FSDPTrainRayActor(TrainRayActor):
         self.global_step = 0
         self.micro_step = 0
         return 0
+
+    @property
+    def original_model(self) -> torch.nn.Module:
+        return self.model
 
     @timer
     def sleep(self, tags):
@@ -281,6 +287,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]
         Timer().end("train_wait")
+        Timer().start("train_loop")
 
         if self.args.offload:
             self.wake_up(("model"))
@@ -296,12 +303,12 @@ class FSDPTrainRayActor(TrainRayActor):
             f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
         )
 
-        if "ref" in self.weights:
-            self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
+        with timer("llh_actor"):
+            self.compute_log_prob("actor", padded_batches)
 
-        print("before compute log probs actor")
-        self.compute_log_prob("actor", padded_batches)
-        print("compute log probs done")
+        if "ref" in self.weights:
+            with timer("llh_ref"):
+                self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
 
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
@@ -471,8 +478,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
+        Timer().end("train_loop")
         log_perf_data(rollout_id, self.args)
-
         Timer().start("train_wait")
 
     @timer
@@ -496,8 +503,8 @@ class FSDPTrainRayActor(TrainRayActor):
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict):
         """Copy model parameters from GPU to CPU storage dictionary"""
-        with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-            state_dict = self.model.state_dict()
+        with FSDP.state_dict_type(self.original_model, StateDictType.FULL_STATE_DICT):
+            state_dict = self.original_model.state_dict()
 
         for name, param in state_dict.items():
             if name not in params_dict:
@@ -508,9 +515,9 @@ class FSDPTrainRayActor(TrainRayActor):
     @torch.no_grad()
     def update_gpu_params_dict(self, params_dict):
         """Load parameters from CPU storage dictionary to GPU model"""
-        with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
+        with FSDP.state_dict_type(self.original_model, StateDictType.FULL_STATE_DICT):
             gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
-            self.model.load_state_dict(gpu_state_dict, strict=True)
+            self.original_model.load_state_dict(gpu_state_dict, strict=True)
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path):
@@ -533,8 +540,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     torch_dtype=torch.bfloat16,
                 )
 
-                with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                    self.model.load_state_dict(temp_ref_model.state_dict(), strict=True)
+                with FSDP.state_dict_type(self.original_model, StateDictType.FULL_STATE_DICT):
+                    self.original_model.load_state_dict(temp_ref_model.state_dict(), strict=True)
 
                 del temp_ref_model
                 torch.cuda.empty_cache()
@@ -555,10 +562,10 @@ def log_perf_data(rollout_id, args):
     if dist.get_rank() == 0:
         log_dict = {f"perf/{key}_time": val for key, val in timer_instance.log_dict().items()}
 
-        if "perf/train_wait_time" in log_dict and "perf/train_time" in log_dict:
-            total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_time"]
+        if "perf/train_wait_time" in log_dict and "perf/train_loop_time" in log_dict:
+            total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_loop_time"]
             if total_time > 0:
-                log_dict["perf/total_train_time"] = total_time
+                log_dict["perf/total_train_loop_time"] = total_time
                 log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
         print(f"perf {rollout_id}: {log_dict}")

@@ -1,37 +1,16 @@
-from contextlib import nullcontext
-
 import torch
-import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import ShardingStrategy
-from transformers.models.auto.configuration_auto import AutoConfig
-from transformers.models.auto.modeling_auto import AutoModelForCausalLM
-from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-import wandb
-from slime.ray.train_actor import TrainRayActor
-from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
-from slime.utils.timer import Timer, timer
 
-from slime.utils.wandb_utils import init_wandb_secondary
-from veomni.distributed.offloading import build_activation_offloading_context
-from veomni.distributed.parallel_state import init_parallel_state, get_parallel_state
+from veomni.distributed.parallel_state import init_parallel_state
 from veomni.models.auto import build_foundation_model
 from veomni.distributed.torch_parallelize import build_parallelize_model
 from veomni.optim.optimizer import build_optimizer
-from .update_weight_utils import UpdateWeightFromTensor
 from .arguments import VeOmnniFullArgs
 
 from dataclasses import dataclass, field
 
 
 from veomni.utils.arguments import ModelArguments, TrainingArguments
-from dataclasses import field
-from ray.actor import ActorProxy
-from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.backends.fsdp_utils.actor import gather_log_probs
 
 from slime.backends.fsdp_utils.actor import FSDPTrainRayActor
 
@@ -82,6 +61,8 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
     """
 
     def init_model(self, args: VeOmnniFullArgs):
+        # TODO: Configure torch seperately
+        torch.set_float32_matmul_precision("high")
         if args.data_parallel_shard_size == -1:
             args.data_parallel_shard_size = data_parallel_size(args) // args.data_parallel_replicate_size
         assert args.data_parallel_shard_size > 0, "data_parallel_shard_size should be greater than 0."
@@ -125,6 +106,9 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         )
 
         assert not args.enable_activation_offload, "Activation offload is not supported yet."
+        if args.compile:
+            print("Compiling model")
+            model = torch.compile(model, mode="default", fullgraph=False)
 
         # self.model_fwd_context, self.model_bwd_context = build_activation_offloading_context(
         #     args.enable_activation_offload,
@@ -132,6 +116,13 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         #     args.activation_gpu_limit,
         # )
         return model
+
+    @property
+    def original_model(self):
+        if self.args.compile:
+            assert hasattr(self.model, "_orig_mod"), "Model is not compiled with torch.compile"
+            return self.model._orig_mod
+        return self.model
 
     def init_optimizer(self, args: VeOmnniFullArgs, model: torch.nn.Module):
         get_optimizer_pre_hook = getattr(model, "get_optimizer_pre_hook", None)
