@@ -1,4 +1,4 @@
-from typing import Callable, Iterator, Optional
+from typing import Callable, Iterable, Iterator, Optional, cast
 import ray
 from slime.backends.fsdp_utils.fsdp_version_utils import preprocess_tensor_for_update_weights
 from slime.utils.memory_utils import print_memory
@@ -14,8 +14,8 @@ use_flattened_tensor_bucket = True
 
 
 def get_named_tensor_buckets(
-    iterable: Iterator[tuple[str, torch.Tensor]], bucket_bytes: int, as_dtype: Optional[torch.dtype] = None
-) -> Iterator[list[tuple[str, torch.Tensor]]]:
+    iterable: Iterable[tuple[str, torch.Tensor]], bucket_bytes: int, as_dtype: Optional[torch.dtype] = None
+) -> Iterable[list[tuple[str, torch.Tensor]]]:
     """
     Group tensors into buckets based on a specified size in megabytes.
 
@@ -97,12 +97,12 @@ class UpdateWeightFromTensor:
             self.model, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
         )
         # Zero copy here
-        named_tensors = [(name, param) for name, param in sharded_state_dict.items()]
+        named_tensors = [(name, cast(torch.Tensor, param)) for name, param in sharded_state_dict.items()]
+        # print_memory(f"before weight update")
         for i, params_batch in enumerate(
             get_named_tensor_buckets(named_tensors, MAX_UPDATE_WEIGHTS_SIZE, as_dtype=torch.bfloat16)
         ):
             print(f"Update weights from tensor {i}")
-            # print_memory(f"before preprocess_tensor_for_update_weights {i}")
             # Detach and convert to the same dtype
             params_batch = [(name, param.detach().to(dtype=torch.bfloat16)) for name, param in params_batch]
             # Then gather the tensor
@@ -116,14 +116,15 @@ class UpdateWeightFromTensor:
                 ]
 
             assert use_flattened_tensor_bucket, "use_flattened_tensor_bucket must be True"
-            flattened_tensor_bucket = create_flattened_tensor_bucket(named_tensors=gathered_named_tensors)
-            metadata = flattened_tensor_bucket.get_metadata()
+            # flattened_tensor_bucket = create_flattened_tensor_bucket(named_tensors=gathered_named_tensors)
+            # metadata = flattened_tensor_bucket.get_metadata()
 
-            flattened_tensor_data = {
-                "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                "metadata": metadata,
-            }
-            serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+            # flattened_tensor_data = {
+            #     "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+            #     "metadata": metadata,
+            # }
+            # serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+            serialized_tensors = MultiprocessingSerializer.serialize(gathered_named_tensors, output_str=True)
 
             serialized_named_tensors = (
                 [None] * dist.get_world_size(self._ipc_gather_group)
@@ -140,8 +141,8 @@ class UpdateWeightFromTensor:
                 kwargs = {
                     "serialized_named_tensors": serialized_named_tensors,
                 }
-                if use_flattened_tensor_bucket:
-                    kwargs["load_format"] = "flattened_bucket"
+                # if use_flattened_tensor_bucket:
+                #     kwargs["load_format"] = "flattened_bucket"
 
                 ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
                 ray.get(ref)
@@ -151,11 +152,11 @@ class UpdateWeightFromTensor:
                 serialized_tensors,
                 params_batch,
                 gathered_named_tensors,
-                flattened_tensor_bucket,
-                flattened_tensor_data,
+                # flattened_tensor_bucket,
+                # flattened_tensor_data,
             )
             # Expected peak memory usage is (memory of model in fp32 / shard + MAX_UPDATE_WEIGHTS_SIZE)
-            # print_memory(f"after update_weights_from_tensor {i}")
+        # print_memory(f"after update")
 
 
 def create_flattened_tensor_bucket(named_tensors: list[tuple[str, torch.Tensor]], dtype=torch.bfloat16):
