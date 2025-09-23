@@ -206,13 +206,13 @@ class FSDPTrainRayActor(TrainRayActor):
 
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
-            with timer(f"{store_prefix}log_probs") and torch.no_grad():
+            with timer(f"{store_prefix}log_probs"), torch.no_grad():
                 for batch in padded_batches:
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         model_args = {"input_ids": batch["tokens"]}
                         if "pixel_values" in batch:
                             model_args["pixel_values"] = batch["pixel_values"]
-                    logits = self.model(**model_args).logits
+                        logits = self.model(**model_args).logits
                     batch[f"{store_prefix}log_probs"] = gather_log_probs(
                         logits, batch["tokens"], self.args.rollout_temperature
                     )
@@ -502,22 +502,6 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: All reduce train_memory_stats
         if dist.get_rank() == 0 and self.args.use_wandb:
             wandb.log(train_memory_stats)
-                    for gid, group in enumerate(self.optimizer.param_groups):
-                        if "lr" in group:
-                            log_dict[f"train/lr-pg_{gid}"] = group["lr"]
-                    
-                    kl_info = ""
-                    if self.args.use_kl_loss and "kl_loss" in aggregated:
-                        kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
-                    
-                    print(f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}")
-                    print(f"step {self.global_step} full: {log_dict}")
-                    
-                    if self.args.use_wandb:
-                        log_dict["train/step"] = self.global_step
-                        wandb.log(log_dict)
-                self.global_step += 1
-
 
         self.update_cpu_params_dict(self.weights["actor"])
         if self.args.offload:
@@ -579,7 +563,6 @@ class FSDPTrainRayActor(TrainRayActor):
         #         self.optimizer_state_dict[name] = torch.empty_like(local, device=torch.device("cpu"), pin_memory=True)
         #     self.optimizer_state_dict[name].copy_(local, non_blocking=True)
         # torch.cuda.synchronize()
-
 
     @torch.no_grad()
     def update_gpu_optimizer_dict(self):
@@ -755,6 +738,7 @@ def log_perf_data(rollout_id, args):
             wandb.log(log_dict)
     timer_instance.reset()
 
+
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
     # log_probs: [B, T-1, V]; input_ids: [B, T]
     assert rollout_temperature > 0, f"rollout_temperature must be greater than 0, but got {rollout_temperature}"
@@ -763,6 +747,10 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temp
     if rollout_temperature != 1.0:
         pred_logits = pred_logits / rollout_temperature
     log_probs_all = torch.log_softmax(pred_logits, dim=-1)
+    tgt = input_ids[:, 1:].contiguous()
+    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
+    return log_probs
+
 
 def per_sample_mean(x, loss_mask):
     return ((x * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp_min(1)).mean()

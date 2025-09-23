@@ -355,6 +355,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "the input should be the same structure as an openai message, e.g. [\{'role': 'user', 'content': 'blabla'\}]. "
                 ),
             )
+            parser.add_argument(
+                "--rollout-max-samples",
+                type=int,
+                default=None,
+                help="The maximum number of samples to load from the prompt data.",
+            )
             parser.add_argument("--apply-chat-template", action="store_true", default=False)
             parser.add_argument("--input-key", type=str, default="input", help="JSON dataset key")
             parser.add_argument("--label-key", type=str, default=None, help="JSON dataset key")

@@ -8,6 +8,7 @@ import torch.distributed as dist
 from slime.utils.types import Sample
 from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
+from itertools import islice
 
 __all__ = ["Dataset"]
 
@@ -38,9 +39,10 @@ class Dataset:
         metadata_key="metadata",
         seed=42,
         apply_chat_template=False,
+        max_samples=None,
     ):
         self.origin_samples = []
-        for data in read_file(path):
+        for data in islice(read_file(path), max_samples):
             if multimodal_keys:
                 prompt_content = []
                 if prompt_key in data:
