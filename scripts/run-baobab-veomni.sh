@@ -41,7 +41,8 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type deepscaler
+   # --rm-type deepscaler
+   --rm-type math
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
@@ -53,8 +54,8 @@ ROLLOUT_ARGS=(
 
 
 DEBUG_ARGS=(
-   # --save-debug-rollout-data ./test/debug_rollout_data_256
-   # --load-debug-rollout-data ./test/debug_rollout_data_256
+   # --save-debug-rollout-data ./test/debug_rollout_data_256_baobab
+   # --load-debug-rollout-data ./test/debug_rollout_data_256_baobab
 )
 
 EVAL_ARGS=(
@@ -114,7 +115,7 @@ SGLANG_ARGS=(
 )
 
 MISC_ARGS=(
-   # --quantize True
+   --quantize True
 )
 
 # launch the master node of ray in container

@@ -4157,7 +4157,6 @@ wheels = [
 
 [[package]]
 name = "veomni"
-version = "0.0.3"
 source = { editable = "VeOmni" }
 dependencies = [
     { name = "blobfile" },
@@ -4171,19 +4170,27 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", marker = "extra == 'audio'", specifier = ">=14.3.0,<15.0" },
+    { name = "bitsandbytes", marker = "extra == 'dit'", specifier = ">=0.46.0,<=0.47.0" },
     { name = "blobfile", specifier = ">=3.0.0" },
     { name = "datasets", specifier = ">=2.16.0,<=2.21.0" },
     { name = "diffusers", specifier = ">=0.30.0,<=0.31.0" },
-    { name = "expecttest", marker = "extra == 'dev'", specifier = ">=0.3.0" },
+    { name = "diffusers", marker = "extra == 'dit'", specifier = ">=0.30.0,<=0.31.0" },
+    { name = "expecttest", marker = "extra == 'dev'", specifier = ">=0.3.0,<0.4" },
+    { name = "flash-attn", marker = "extra == 'gpu'", specifier = "==2.6.3" },
+    { name = "librosa", marker = "extra == 'audio'", specifier = ">=0.11.0,<0.12" },
+    { name = "liger-kernel", marker = "extra == 'gpu'", specifier = ">=0.5.5,<=0.5.6" },
     { name = "packaging", specifier = ">=23.0,<26.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0,<5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0.0,<8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7.0,<1.0" },
+    { name = "soundfile", marker = "extra == 'audio'", specifier = ">=0.13.1,<0.14" },
     { name = "tiktoken", specifier = ">=0.9.0" },
     { name = "torchdata", specifier = ">=0.8.0,<1.0" },
-    { name = "transformers", extras = ["torch"], specifier = ">=4.46.2" },
+    { name = "torchvision", marker = "extra == 'npu'", specifier = ">=0.16.0,<0.16.1" },
+    { name = "transformers", extras = ["torch"], specifier = ">=4.51.3,<4.57.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "audio", "dit", "npu", "gpu"]
 
 [[package]]
 name = "virtualenv"

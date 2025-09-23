@@ -26,8 +26,9 @@ from slime.utils.wandb_utils import init_wandb_secondary
 from slime.utils.timer import Timer, timer
 from slime.utils.memory_utils import available_memory, clear_memory, print_memory
 
-from .update_weight_utils import UpdateWeightFromTensor
+from .update_weight_utils import UpdateWeightFromTensor, PreprocessTensorFunc
 from slime.utils.logging import configure_logging
+from transformers import PreTrainedModel
 
 # TODO:
 # from torch.distributed.checkpoint.state_dict import get_state_dict
@@ -52,7 +53,7 @@ class FSDPTrainRayActor(TrainRayActor):
         torch_memory_saver.hook_mode = "torch"
         super().__init__(world_size, rank, master_addr, master_port, wandb_run_id)
 
-    def init_model(self, args):
+    def init_model(self, args) -> PreTrainedModel:
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
             model = AutoModelForCausalLM.from_pretrained(
                 args.hf_checkpoint,
@@ -84,6 +85,10 @@ class FSDPTrainRayActor(TrainRayActor):
             weight_decay=args.weight_decay,
         )
         return optimizer
+
+    @classmethod
+    def build_model_weights_post_process(cls, args) -> PreprocessTensorFunc | None:
+        return None
 
     def init(self, args, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
@@ -122,7 +127,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        self.weight_updator = UpdateWeightFromTensor(self.args, self.original_model)
+        self.weight_updator = UpdateWeightFromTensor(
+            self.args, self.original_model, self.build_model_weights_post_process(args)
+        )
 
         self.optimizer_state_dict = {}
 
@@ -168,7 +175,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return
 
-        raise NotImplementedError()
+        import os
+
+        os.makedirs(f"{self.args.save}/iter_{iteration:07}/hf", exist_ok=True)
+
+        self.model.save_pretrained(f"{self.args.save}/iter_{iteration:07}/hf", save_dtype=torch.bfloat16)
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
