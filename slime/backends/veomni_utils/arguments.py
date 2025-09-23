@@ -41,7 +41,7 @@ class VeOmniArgs:
     compile: bool = False
 
     data_parallel_mode: str = field(
-        default="fsdp1",
+        default="fsdp2",
         metadata={"help": "Data parallel mode."},
     )
     data_parallel_replicate_size: int = field(

@@ -3,6 +3,7 @@
 # Download model
 hf download Qwen/Qwen3-0.6B --local-dir /root/Qwen3-0.6B
 hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
+hf download Qwen/Qwen3-14B --local-dir /root/Qwen3-14B
 
 # Download training dataset (dapo-math-17k)
 hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k

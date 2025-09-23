@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data_256
-   --load-debug-rollout-data ./test/debug_rollout_data_256
+   # --load-debug-rollout-data ./test/debug_rollout_data_256
 )
 
 EVAL_ARGS=(
@@ -132,8 +132,8 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-s
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"RAY_DEDUP_LOGS_ALLOW_REGEX\": \"Memory-Usage.*\",
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"no_proxy\": \"localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}\",
     \"SLIME_BACKEND\": \"veomni\"
   }

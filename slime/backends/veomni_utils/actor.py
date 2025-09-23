@@ -77,23 +77,23 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             ulysses_size=args.ulysses_parallel_size,
             dp_mode=args.data_parallel_mode,
         )
-        with torch.device(f"cuda:{torch.cuda.current_device()}"):
-            model = build_foundation_model(
-                config_path=args.hf_checkpoint,
-                quantize=False,  # Student model quantization
-                weights_path=args.hf_checkpoint,
-                torch_dtype="bfloat16",
-                # attn_implementation=args.model.attn_implementation,
-                # moe_implementation=args.model.moe_implementation,
-                # init_device=args.train.init_device,
-                # force_use_huggingface=args.model.force_use_huggingface,
-            )
+        # with torch.device(f"cuda:{torch.cuda.current_device()}"):
+        model = build_foundation_model(
+            config_path=args.hf_checkpoint,
+            quantize=False,  # Student model quantization
+            weights_path=args.hf_checkpoint,
+            torch_dtype="bfloat16",
+            init_device="meta",
+            # attn_implementation=args.model.attn_implementation,
+            # moe_implementation=args.model.moe_implementation,
+            # force_use_huggingface=args.model.force_use_huggingface,
+        )
         basic_modules = model._no_split_modules if model._no_split_modules is not None else []
         if isinstance(args.basic_modules, list):
             basic_modules.extend(args.basic_modules)
         model = build_parallelize_model(
             model,
-            # init_device=args.train.init_device,
+            init_device="meta",
             weights_path=args.hf_checkpoint,
             enable_full_shard=args.enable_full_shard,
             enable_mixed_precision=args.enable_mixed_precision,
@@ -116,6 +116,13 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         #     args.activation_gpu_limit,
         # )
         return model
+
+    def load_ref_model(self, ref_load_path):
+        """Load reference model parameters once and store in CPU memory (like Megatron backend)"""
+        assert ref_load_path == self.args.hf_checkpoint, "Reference model path must be the same as the model path"
+        self.weights["ref"] = {}
+        self.update_cpu_params_dict(self.weights["ref"])
+        print("Reference model parameters loaded and stored in CPU memory")
 
     @property
     def original_model(self):

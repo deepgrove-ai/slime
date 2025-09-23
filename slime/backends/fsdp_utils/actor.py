@@ -1,13 +1,22 @@
 from contextlib import nullcontext
+from typing import Any
 
 import torch
 import torch.distributed as dist
 from PIL import Image
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy, StateDictType
+from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+    set_model_state_dict,
+    set_optimizer_state_dict,
+    get_optimizer_state_dict,
+)
 import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
@@ -15,7 +24,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.wandb_utils import init_wandb_secondary
 from slime.utils.timer import Timer, timer
-from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.memory_utils import available_memory, clear_memory, print_memory
 
 from .update_weight_utils import UpdateWeightFromTensor
 from slime.utils.logging import configure_logging
@@ -98,26 +107,27 @@ class FSDPTrainRayActor(TrainRayActor):
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
         # Load model
+        print_memory("before init model")
         self.model = self.init_model(args)
         self.model.train()
-
-        # TODO: set correct auto_wrap_policy
-
+        print_memory("after init model")
         self.optimizer = self.init_optimizer(args, self.model)
-
-        # TODO: load
 
         self.weights = {"actor": {}}
 
         self.ref_model = None
         if with_ref:
             self.load_ref_model(args.ref_load)
+        print_memory("after load ref model")
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
+        self.weight_updator = UpdateWeightFromTensor(self.args, self.original_model)
+
+        self.optimizer_state_dict = {}
 
         if self.args.offload:
+            self.offload_optimizer()
             self.sleep(("model"))
 
         Timer().start("train_wait")
@@ -291,6 +301,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if self.args.offload:
             self.wake_up(("model"))
+            print_memory("before load_optimizer")
+            with timer("load_optimizer"):
+                self.update_gpu_optimizer_dict()
+            print_memory("after load_optimizer")
 
         world_size = dist.get_world_size()
         rank = dist.get_rank()
@@ -477,7 +491,18 @@ class FSDPTrainRayActor(TrainRayActor):
                             wandb.log(log_dict)
                     self.global_step += 1
 
+        train_memory_stats = available_memory()
+        # Prefix with train_mem/
+        train_memory_stats = {f"train_mem/{k}": v for k, v in train_memory_stats.items()}
+        train_memory_stats["rollout/step"] = rollout_id
+        # TODO: All reduce train_memory_stats
+        if dist.get_rank() == 0 and self.args.use_wandb:
+            wandb.log(train_memory_stats)
+
         self.update_cpu_params_dict(self.weights["actor"])
+        if self.args.offload:
+            with timer("offload_optimizer"):
+                self.offload_optimizer()
         Timer().end("train_loop")
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
@@ -501,24 +526,149 @@ class FSDPTrainRayActor(TrainRayActor):
             self.sleep(("model"))
 
     @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict):
-        """Copy model parameters from GPU to CPU storage dictionary"""
-        with FSDP.state_dict_type(self.original_model, StateDictType.FULL_STATE_DICT):
-            state_dict = self.original_model.state_dict()
+    def offload_optimizer(self):
+        self.optimizer_state_dict = get_optimizer_state_dict(
+            self.model, self.optimizer, options=StateDictOptions(cpu_offload=True, full_state_dict=False)
+        )
 
-        for name, param in state_dict.items():
-            if name not in params_dict:
-                params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
-            params_dict[name].copy_(param.detach(), non_blocking=True)
-        torch.cuda.synchronize()
+        # 2) Drop the live state from the optimizer to free GPU memory
+        #    (safe: PyTorch will lazily re-create on next .step() if you reload later)
+        self.optimizer.state.clear()
+
+        # optimizer_sd: dict[str, Any] = get_optimizer_state_dict(
+        #     self.model,
+        #     self.optimizer,
+        #     options=StateDictOptions(full_state_dict=False, cpu_offload=False),
+        # )
+        # for name, val in optimizer_sd.items():
+        #     if isinstance(val, DTensor):
+        #         local = val.to_local()
+        #     elif isinstance(val, torch.Tensor):
+        #         local = val
+        #     else:
+        #         continue
+        #     buf = self.optimizer_state_dict.get(name)
+        #     if buf is None or buf.shape != local.shape or buf.dtype != local.dtype:
+        #         self.optimizer_state_dict[name] = torch.empty_like(local, device=torch.device("cpu"), pin_memory=True)
+        #     self.optimizer_state_dict[name].copy_(local, non_blocking=True)
+        # torch.cuda.synchronize()
 
     @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict):
-        """Load parameters from CPU storage dictionary to GPU model"""
-        with FSDP.state_dict_type(self.original_model, StateDictType.FULL_STATE_DICT):
-            gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
-            self.original_model.load_state_dict(gpu_state_dict, strict=True)
-        torch.cuda.synchronize()
+    def update_gpu_optimizer_dict(self):
+        if not self.optimizer_state_dict:
+            print("No optimizer state dict to update")
+            return
+        set_optimizer_state_dict(
+            self.model,
+            self.optimizer,
+            optim_state_dict=self.optimizer_state_dict,
+            options=StateDictOptions(full_state_dict=False, strict=True),
+        )
+        # template = get_optimizer_state_dict(
+        #     self.original_model,
+        #     self.optimizer,
+        #     options=StateDictOptions(full_state_dict=False, cpu_offload=False),
+        # )
+        # device = torch.cuda.current_device()
+        # rebuild: dict[str, Any] = {}
+        # for name, val in template.items():
+        #     if isinstance(val, DTensor):
+        #         local_cpu = optimizer_dict[name]
+        #         local_dev = local_cpu.to(device, non_blocking=True)
+        #         rebuild[name] = DTensor.from_local(
+        #             local_dev,
+        #             device_mesh=val.device_mesh,
+        #             placements=val.placements,
+        #             shape=val.size(),
+        #             stride=val.stride(),
+        #         )
+        #     elif isinstance(val, torch.Tensor):
+        #         rebuild[name] = optimizer_dict[name].to(device, non_blocking=True)
+        #     else:
+        #         continue
+        # set_optimizer_state_dict(
+        #     self.model,
+        #     self.optimizer,
+        #     optim_state_dict=rebuild,
+        #     options=StateDictOptions(full_state_dict=False, strict=True),
+        # )
+        # torch.cuda.synchronize()
+
+    @torch.no_grad()
+    def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
+        """
+        Store ONLY this rank's shards on pinned CPU.
+        Works with DTensor+DeviceMesh by extracting local shards.
+        """
+        model_sd: dict[str, Any] = get_model_state_dict(
+            self.original_model,
+            options=StateDictOptions(full_state_dict=False, cpu_offload=False),
+        )
+        # print(f"{model_sd=}")
+
+        for name, val in model_sd.items():
+            if isinstance(val, DTensor):
+                local = val.to_local()  # this rank's shard on device
+            elif isinstance(val, torch.Tensor):
+                local = val  # unsharded tensor on device
+            else:
+                continue  # skip non-tensors/metadata if any
+
+            buf = params_dict.get(name)
+            if buf is None or buf.shape != local.shape or buf.dtype != local.dtype:
+                params_dict[name] = torch.empty_like(local, device=torch.device("cpu"), pin_memory=True)
+            params_dict[name].copy_(local, non_blocking=True)
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+    @torch.no_grad()
+    def update_gpu_params_dict(self, params_dict: dict[str, torch.Tensor], strict: bool = True) -> None:
+        """
+        Rebuild DTensors from the saved local CPU shards using the model's CURRENT
+        mesh/placements, then load with DCP state-dict setters (no all-gather).
+        """
+        # Use a template sharded state_dict to read mesh/placements/global sizes
+        template: dict[str, Any] = get_model_state_dict(
+            self.original_model,
+            options=StateDictOptions(full_state_dict=False, cpu_offload=False),
+        )
+
+        device = torch.cuda.current_device()
+        rebuild: dict[str, Any] = {}
+
+        for name, spec in template.items():
+            if isinstance(spec, DTensor):
+                local_cpu = params_dict[name]
+                local_dev = local_cpu.to(device, non_blocking=True)
+                # Recreate a DTensor with the SAME global spec as the template
+                dt = DTensor.from_local(
+                    local_dev,
+                    device_mesh=spec.device_mesh,
+                    placements=spec.placements,
+                    shape=spec.size(),
+                    stride=spec.stride(),
+                )
+                rebuild[name] = dt
+            elif isinstance(spec, torch.Tensor):
+                rebuild[name] = params_dict[name].to(device, non_blocking=True)
+            else:
+                continue
+
+        # Load back into the module using DCP's setter (strict by default)
+        missing_unexpected = set_model_state_dict(
+            self.original_model,
+            model_state_dict=rebuild,
+            options=StateDictOptions(full_state_dict=False, strict=strict),
+        )
+        if (missing_unexpected.missing_keys or missing_unexpected.unexpected_keys) and strict:
+            raise RuntimeError(
+                f"load mismatch: missing={missing_unexpected.missing_keys}, "
+                f"unexpected={missing_unexpected.unexpected_keys}"
+            )
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path):
         """Load reference model parameters once and store in CPU memory (like Megatron backend)"""
