@@ -56,10 +56,10 @@ def get_named_tensor_buckets(
 
 
 ONE_GB = 1024 * 1024 * 1024
-MAX_UPDATE_WEIGHTS_SIZE = 4 * ONE_GB  # 1GB
+MAX_UPDATE_WEIGHTS_SIZE = 8 * ONE_GB  # 1GB
 
 
-PREPROCESS_TENSOR_FUNC = Callable[[str, torch.Tensor], torch.Tensor]
+PreprocessTensorFunc = Callable[[str, torch.Tensor], torch.Tensor]
 
 
 class UpdateWeightFromTensor:
@@ -67,7 +67,7 @@ class UpdateWeightFromTensor:
         self,
         args,
         model,
-        preprocess_tensor_func: Optional[PREPROCESS_TENSOR_FUNC] = None,
+        preprocess_tensor_func: Optional[PreprocessTensorFunc] = None,
     ):
         self.args = args
         self.model = model
@@ -98,7 +98,9 @@ class UpdateWeightFromTensor:
         )
         # Zero copy here
         named_tensors = [(name, param) for name, param in sharded_state_dict.items()]
-        for i, params_batch in enumerate(get_named_tensor_buckets(named_tensors, MAX_UPDATE_WEIGHTS_SIZE)):
+        for i, params_batch in enumerate(
+            get_named_tensor_buckets(named_tensors, MAX_UPDATE_WEIGHTS_SIZE, as_dtype=torch.bfloat16)
+        ):
             print(f"Update weights from tensor {i}")
             # print_memory(f"before preprocess_tensor_for_update_weights {i}")
             # Detach and convert to the same dtype

@@ -36,6 +36,7 @@ class VeOmniArgs:
     enable_fsdp_offload: bool = False
     enable_forward_prefetch: bool = True
     enable_reentrant: bool = False
+    quantize: bool = False
 
     # Currently broken
     compile: bool = False

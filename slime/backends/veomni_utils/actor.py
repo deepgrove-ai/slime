@@ -1,4 +1,6 @@
+from slime.backends.fsdp_utils.update_weight_utils import PreprocessTensorFunc
 import torch
+from veomni.models.transformers.qwen3_moe.modeling_qwen3_moe import quantize
 
 
 from veomni.distributed.parallel_state import init_parallel_state
@@ -47,6 +49,13 @@ def dump_param_and_state_dtypes(model: torch.nn.Module, optimizer: torch.optim.O
     return counts
 
 
+def preprocess_tensor_for_update_weights(name: str, tensor: torch.Tensor) -> torch.Tensor:
+    if name.endswith("_proj.weight"):
+        assert len(tensor.shape) == 2, "Quantized weight should be 2D"
+        return quantize(tensor)
+    return tensor
+
+
 class VeOmniTrainRayActor(FSDPTrainRayActor):
     """Simplified TrainRayActor for pure HF+FSDP training.
 
@@ -59,6 +68,12 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
       * Rank0 gathers state_dict (full) and broadcasts tensor-by-tensor.
       * For small models this is fine; for larger models consider sharded state_dict type.
     """
+
+    @classmethod
+    def build_model_weights_post_process(cls, args: VeOmnniFullArgs) -> PreprocessTensorFunc | None:
+        if not args.quantize:
+            return None
+        return preprocess_tensor_for_update_weights
 
     def init_model(self, args: VeOmnniFullArgs):
         # TODO: Configure torch seperately
@@ -80,7 +95,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         # with torch.device(f"cuda:{torch.cuda.current_device()}"):
         model = build_foundation_model(
             config_path=args.hf_checkpoint,
-            quantize=False,  # Student model quantization
+            quantize=args.quantize,  # Student model quantization
             weights_path=args.hf_checkpoint,
             torch_dtype="bfloat16",
             init_device="meta",

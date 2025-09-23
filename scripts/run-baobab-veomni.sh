@@ -24,14 +24,14 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 # SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-# source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+# source "${SCRIPT_DIR}/models/qsft_14b.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
-   --ref-load /root/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   # --load /root/Qwen3-4B_slime/
-   # --save /root/Qwen3-4B_slime/
+   --hf-checkpoint /root/qsft_14b
+   --ref-load /root/qsft_14b
+   #--hf-checkpoint /root/qsft_14b-FP8
+   # --load /root/qsft_14b_slime/
+   # --save /root/qsft_14b_slime/
    # --save-interval 20
 )
 
@@ -104,35 +104,28 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dev
-   --wandb-group qwen3-4B-test-veomni
+   --wandb-group qsft_14b-test-veomni
    # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 4
    --sglang-mem-fraction-static 0.7
 )
 
-# MISC_ARGS=(
-#    # default dropout in megatron is 0.1
-#    --attention-dropout 0.0
-#    --hidden-dropout 0.0
-#    # should be good for model performance
-#    --accumulate-allreduce-grads-in-fp32
-#    --attention-softmax-in-fp32
-#    # need to comment this when using model with MLA
-#    --attention-backend flash
-# )
+MISC_ARGS=(
+   # --quantize True
+)
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution
+   #  \"RAY_DEDUP_LOGS_ALLOW_REGEX\": \"Memory-Usage.*\",
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"RAY_DEDUP_LOGS_ALLOW_REGEX\": \"Memory-Usage.*\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"no_proxy\": \"localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}\",
     \"SLIME_BACKEND\": \"veomni\"
@@ -152,8 +145,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${DEBUG_ARGS[@]} \
-   ${SGLANG_ARGS[@]}
+   ${SGLANG_ARGS[@]} \
+   ${MISC_ARGS[@]}
    # ${EVAL_ARGS[@]} \
    # ${DISTRIBUTED_ARGS[@]} \
-   # ${MISC_ARGS[@]}
    # ${PERF_ARGS[@]} \

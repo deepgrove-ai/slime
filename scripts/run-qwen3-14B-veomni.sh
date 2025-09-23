@@ -24,14 +24,14 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 # SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-# source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+# source "${SCRIPT_DIR}/models/Qwen3-14B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
-   --ref-load /root/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   # --load /root/Qwen3-4B_slime/
-   # --save /root/Qwen3-4B_slime/
+   --hf-checkpoint /root/Qwen3-14B
+   --ref-load /root/Qwen3-14B
+   #--hf-checkpoint /root/Qwen3-14B-FP8
+   # --load /root/Qwen3-14B_slime/
+   # --save /root/Qwen3-14B_slime/
    # --save-interval 20
 )
 
@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data_256
-   # --load-debug-rollout-data ./test/debug_rollout_data_256
+   --load-debug-rollout-data ./test/debug_rollout_data_256
 )
 
 EVAL_ARGS=(
@@ -104,12 +104,12 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dev
-   --wandb-group qwen3-4B-test-veomni
+   --wandb-group Qwen3-14B-test-veomni
    # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 4
    --sglang-mem-fraction-static 0.7
 )
 
@@ -129,10 +129,10 @@ export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution
+   #  \"RAY_DEDUP_LOGS_ALLOW_REGEX\": \"Memory-Usage.*\",
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"RAY_DEDUP_LOGS_ALLOW_REGEX\": \"Memory-Usage.*\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"no_proxy\": \"localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}\",
     \"SLIME_BACKEND\": \"veomni\"
