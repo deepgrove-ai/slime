@@ -18,13 +18,14 @@ from torch.distributed.checkpoint.state_dict import (
     get_optimizer_state_dict,
 )
 import wandb
+from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
-from slime.utils.wandb_utils import init_wandb_secondary
 from slime.utils.timer import Timer, timer
 from slime.utils.memory_utils import available_memory, clear_memory, print_memory
+from slime.utils.wandb_utils import init_wandb_secondary
 
 from .update_weight_utils import UpdateWeightFromTensor, PreprocessTensorFunc
 from slime.utils.logging import configure_logging
@@ -130,6 +131,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updator = UpdateWeightFromTensor(
             self.args, self.original_model, self.build_model_weights_post_process(args)
         )
+        self.connected = False
 
         self.optimizer_state_dict = {}
 
@@ -180,15 +182,6 @@ class FSDPTrainRayActor(TrainRayActor):
         os.makedirs(f"{self.args.save}/iter_{iteration:07}/hf", exist_ok=True)
 
         self.model.save_pretrained(f"{self.args.save}/iter_{iteration:07}/hf", save_dtype=torch.bfloat16)
-
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
-        dist.barrier(group=get_gloo_group())
 
     def compute_log_prob(
         self,
@@ -509,6 +502,22 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: All reduce train_memory_stats
         if dist.get_rank() == 0 and self.args.use_wandb:
             wandb.log(train_memory_stats)
+                    for gid, group in enumerate(self.optimizer.param_groups):
+                        if "lr" in group:
+                            log_dict[f"train/lr-pg_{gid}"] = group["lr"]
+                    
+                    kl_info = ""
+                    if self.args.use_kl_loss and "kl_loss" in aggregated:
+                        kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
+                    
+                    print(f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}")
+                    print(f"step {self.global_step} full: {log_dict}")
+                    
+                    if self.args.use_wandb:
+                        log_dict["train/step"] = self.global_step
+                        wandb.log(log_dict)
+                self.global_step += 1
+
 
         self.update_cpu_params_dict(self.weights["actor"])
         if self.args.offload:
@@ -522,6 +531,13 @@ class FSDPTrainRayActor(TrainRayActor):
     def update_weights(self):  # type: ignore[override]
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
+
+        if not self.connected:
+            self.connected = True
+            rollout_engines = get_actors("rollout")
+            rollout_engine_lock = get_actors("rollout_lock", 0)
+            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            dist.barrier(group=get_gloo_group())
 
         if self.args.offload:
             # TODO: don't wake up here
@@ -563,6 +579,7 @@ class FSDPTrainRayActor(TrainRayActor):
         #         self.optimizer_state_dict[name] = torch.empty_like(local, device=torch.device("cpu"), pin_memory=True)
         #     self.optimizer_state_dict[name].copy_(local, non_blocking=True)
         # torch.cuda.synchronize()
+
 
     @torch.no_grad()
     def update_gpu_optimizer_dict(self):
@@ -728,7 +745,6 @@ def log_perf_data(rollout_id, args):
             if total_time > 0:
                 log_dict["perf/total_train_loop_time"] = total_time
                 log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
-
         print(f"perf {rollout_id}: {log_dict}")
         if args.use_wandb:
             log_dict["rollout/step"] = (
@@ -739,7 +755,6 @@ def log_perf_data(rollout_id, args):
             wandb.log(log_dict)
     timer_instance.reset()
 
-
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
     # log_probs: [B, T-1, V]; input_ids: [B, T]
     assert rollout_temperature > 0, f"rollout_temperature must be greater than 0, but got {rollout_temperature}"
@@ -748,10 +763,6 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temp
     if rollout_temperature != 1.0:
         pred_logits = pred_logits / rollout_temperature
     log_probs_all = torch.log_softmax(pred_logits, dim=-1)
-    tgt = input_ids[:, 1:].contiguous()
-    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-    return log_probs
-
 
 def per_sample_mean(x, loss_mask):
     return ((x * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp_min(1)).mean()
