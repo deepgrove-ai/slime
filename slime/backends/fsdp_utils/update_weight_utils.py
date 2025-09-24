@@ -8,10 +8,6 @@ from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
 
-from sglang.srt.model_executor.model_runner import FlattenedTensorBucket, FlattenedTensorMetadata
-
-use_flattened_tensor_bucket = True
-
 
 def get_named_tensor_buckets(
     iterable: Iterable[tuple[str, torch.Tensor]], bucket_bytes: int, as_dtype: Optional[torch.dtype] = None
@@ -59,7 +55,8 @@ ONE_GB = 1024 * 1024 * 1024
 MAX_UPDATE_WEIGHTS_SIZE = 8 * ONE_GB  # 1GB
 
 
-PreprocessTensorFunc = Callable[[str, torch.Tensor], torch.Tensor]
+PostprocessTensorFunc = Callable[[str, torch.Tensor], tuple[tuple[str, torch.Tensor], ...]]
+PreprocessStateDictFunc = Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]]
 
 
 class UpdateWeightFromTensor:
@@ -67,11 +64,13 @@ class UpdateWeightFromTensor:
         self,
         args,
         model,
-        preprocess_tensor_func: Optional[PreprocessTensorFunc] = None,
+        postprocess_tensor_func: Optional[PostprocessTensorFunc] = None,
+        preprocess_state_dict_func: Optional[PreprocessStateDictFunc] = None,
     ):
         self.args = args
         self.model = model
-        self.preprocess_tensor_func = preprocess_tensor_func
+        self.postprocess_tensor_func = postprocess_tensor_func
+        self.preprocess_state_dict_func = preprocess_state_dict_func
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
@@ -93,11 +92,14 @@ class UpdateWeightFromTensor:
     @torch.no_grad()
     def update_weights(self):
         monkey_patch_torch_reductions()
-        sharded_state_dict = get_model_state_dict(
-            self.model, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
+        sharded_state_dict = cast(
+            dict[str, torch.Tensor],
+            get_model_state_dict(self.model, options=StateDictOptions(full_state_dict=False, cpu_offload=False)),
         )
+        if self.preprocess_state_dict_func is not None:
+            sharded_state_dict = self.preprocess_state_dict_func(sharded_state_dict)
         # Zero copy here
-        named_tensors = [(name, cast(torch.Tensor, param)) for name, param in sharded_state_dict.items()]
+        named_tensors = [(name, param) for name, param in sharded_state_dict.items()]
         # print_memory(f"before weight update")
         for i, params_batch in enumerate(
             get_named_tensor_buckets(named_tensors, MAX_UPDATE_WEIGHTS_SIZE, as_dtype=torch.bfloat16)
@@ -110,20 +112,11 @@ class UpdateWeightFromTensor:
                 (name, preprocess_tensor_for_update_weights(param)) for name, param in params_batch
             ]
 
-            if self.preprocess_tensor_func is not None:
+            if self.postprocess_tensor_func is not None:
                 gathered_named_tensors = [
-                    (name, self.preprocess_tensor_func(name, param)) for name, param in gathered_named_tensors
+                    k for name, param in gathered_named_tensors for k in self.postprocess_tensor_func(name, param)
                 ]
 
-            assert use_flattened_tensor_bucket, "use_flattened_tensor_bucket must be True"
-            # flattened_tensor_bucket = create_flattened_tensor_bucket(named_tensors=gathered_named_tensors)
-            # metadata = flattened_tensor_bucket.get_metadata()
-
-            # flattened_tensor_data = {
-            #     "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-            #     "metadata": metadata,
-            # }
-            # serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
             serialized_tensors = MultiprocessingSerializer.serialize(gathered_named_tensors, output_str=True)
 
             serialized_named_tensors = (
@@ -141,8 +134,6 @@ class UpdateWeightFromTensor:
                 kwargs = {
                     "serialized_named_tensors": serialized_named_tensors,
                 }
-                # if use_flattened_tensor_bucket:
-                #     kwargs["load_format"] = "flattened_bucket"
 
                 ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
                 ray.get(ref)
@@ -157,42 +148,3 @@ class UpdateWeightFromTensor:
             )
             # Expected peak memory usage is (memory of model in fp32 / shard + MAX_UPDATE_WEIGHTS_SIZE)
         # print_memory(f"after update")
-
-
-def create_flattened_tensor_bucket(named_tensors: list[tuple[str, torch.Tensor]], dtype=torch.bfloat16):
-    # Create bucket from named tensors
-
-    metadata: list[FlattenedTensorMetadata] = [None] * len(named_tensors)
-    # First move all named_tensors to cpu
-    original_device = torch.cuda.current_device()
-    # TODO: Remove the move to cpu? We do this to avoid double memory usage in torch.cat
-    named_tensors = [(name, tensor.to(device="cpu", dtype=dtype)) for name, tensor in named_tensors]
-
-    # Collect metadata and flatten tensors
-    current_idx = 0
-    flattened_tensors: list[torch.Tensor] = [None] * len(named_tensors)
-
-    for i, (name, tensor) in enumerate(named_tensors):
-        flattened = tensor.flatten()
-        flattened_tensors[i] = flattened
-
-        # Store metadata
-
-        numel = flattened.numel()
-        metadata_obj = FlattenedTensorMetadata(
-            name=name,
-            shape=tensor.shape,
-            dtype=tensor.dtype,
-            start_idx=current_idx,
-            end_idx=current_idx + numel,
-            numel=numel,
-        )
-        metadata[i] = metadata_obj
-        current_idx += numel
-
-    # Concatenate all flattened tensors
-    flattened_tensor = torch.cat(flattened_tensors, dim=0).to(device=original_device, dtype=dtype)
-    return FlattenedTensorBucket(
-        flattened_tensor=flattened_tensor,
-        metadata=metadata,
-    )

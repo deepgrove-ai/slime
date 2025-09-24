@@ -1,6 +1,9 @@
-from torch.distributed.checkpoint.state_dict import StateDictOptions
-from slime.backends.fsdp_utils.update_weight_utils import PreprocessTensorFunc
+from typing import cast
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
+from transformers import PreTrainedModel
+from slime.backends.fsdp_utils.update_weight_utils import UpdateWeightFromTensor
 import torch
+from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from veomni.models.transformers.qwen3_moe.modeling_qwen3_moe import quantize
 import torch.distributed.fsdp._fully_shard._fsdp_param_group
 
@@ -9,6 +12,9 @@ from veomni.models.auto import build_foundation_model
 from veomni.distributed.torch_parallelize import build_parallelize_model, MixedPrecisionConfig, DType
 from veomni.optim.optimizer import MultiOptimizer, build_optimizer
 from .arguments import VeOmnniFullArgs
+from veomni.utils.convert_moe import get_full_ep_shard_state, resplit_experts_tensor
+from functools import partial
+
 
 from dataclasses import dataclass, field
 
@@ -50,11 +56,11 @@ def dump_param_and_state_dtypes(model: torch.nn.Module, optimizer: torch.optim.O
     return counts
 
 
-def preprocess_tensor_for_update_weights(name: str, tensor: torch.Tensor) -> torch.Tensor:
+def quantize_proj_weights(name: str, tensor: torch.Tensor) -> tuple[tuple[str, torch.Tensor], ...]:
     if name.endswith("_proj.weight"):
         assert len(tensor.shape) == 2, "Quantized weight should be 2D"
-        return quantize(tensor)
-    return tensor
+        return ((name, quantize(tensor)),)
+    return ((name, tensor),)
 
 
 class VeOmniTrainRayActor(FSDPTrainRayActor):
@@ -71,10 +77,37 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
     """
 
     @classmethod
-    def build_model_weights_post_process(cls, args: VeOmnniFullArgs) -> PreprocessTensorFunc | None:
-        if not args.quantize:
-            return None
-        return preprocess_tensor_for_update_weights
+    def make_weight_updater(cls, args: VeOmnniFullArgs, model: PreTrainedModel) -> UpdateWeightFromTensor:
+        postprocess = quantize_proj_weights if args.quantize else None
+        preprocess_state_dict = None
+        # TODO: Make this less cursed
+        if args.moe_implementation == "fused":
+            preprocess_state_dict = partial(get_full_ep_shard_state, config=model.config, prefix="", model=model)
+            resplit_experts_tensor_partial = partial(resplit_experts_tensor, num_experts=int(model.config.num_experts))
+            if postprocess is not None:
+
+                def reprocess(name: str, tensor: torch.Tensor) -> tuple[tuple[str, torch.Tensor], ...]:
+                    post_processed = postprocess(name, tensor)
+                    reprocessed = tuple(k for n, t in post_processed for k in resplit_experts_tensor_partial(n, t))
+                    return reprocessed
+
+                postprocess = reprocess
+            else:
+                postprocess = resplit_experts_tensor_partial
+        weight_updater = UpdateWeightFromTensor(
+            args, model, postprocess_tensor_func=postprocess, preprocess_state_dict_func=preprocess_state_dict
+        )
+
+        monkey_patch_torch_reductions()
+        sharded_state_dict = cast(
+            dict[str, torch.Tensor],
+            get_model_state_dict(model, options=StateDictOptions(full_state_dict=False, cpu_offload=False)),
+        )
+        if preprocess_state_dict is not None:
+            print("Preprocessing state dict for weight updater")
+            sharded_state_dict = preprocess_state_dict(sharded_state_dict)
+            print("Done preprocessing state dict for weight updater")
+        return weight_updater
 
     @torch.no_grad()
     def offload_optimizer(self):
@@ -100,6 +133,8 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
     def init_model(self, args: VeOmnniFullArgs):
         # TODO: Configure torch seperately
         torch.set_float32_matmul_precision("high")
+        if args.moe_implementation == "fused":
+            assert args.expert_parallel_size > 1, "MoE model requires expert parallel size > 1"
         if args.data_parallel_shard_size == -1:
             args.data_parallel_shard_size = data_parallel_size(args) // args.data_parallel_replicate_size
         assert args.data_parallel_shard_size > 0, "data_parallel_shard_size should be greater than 0."
@@ -159,6 +194,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         #     args.enable_gradient_checkpointing,
         #     args.activation_gpu_limit,
         # )
+
         return model
 
     def load_ref_model(self, ref_load_path):

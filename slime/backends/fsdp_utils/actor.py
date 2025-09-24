@@ -27,12 +27,9 @@ from slime.utils.timer import Timer, timer
 from slime.utils.memory_utils import available_memory, clear_memory, print_memory
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from .update_weight_utils import UpdateWeightFromTensor, PreprocessTensorFunc
+from .update_weight_utils import UpdateWeightFromTensor, PostprocessTensorFunc
 from slime.utils.logging import configure_logging
 from transformers import PreTrainedModel
-
-# TODO:
-# from torch.distributed.checkpoint.state_dict import get_state_dict
 
 logger = configure_logging(__name__)
 
@@ -88,8 +85,8 @@ class FSDPTrainRayActor(TrainRayActor):
         return optimizer
 
     @classmethod
-    def build_model_weights_post_process(cls, args) -> PreprocessTensorFunc | None:
-        return None
+    def make_weight_updater(cls, args, model: PreTrainedModel) -> UpdateWeightFromTensor:
+        return UpdateWeightFromTensor(args, model)
 
     def init(self, args, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
@@ -128,9 +125,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        self.weight_updator = UpdateWeightFromTensor(
-            self.args, self.original_model, self.build_model_weights_post_process(args)
-        )
+        self.weight_updator = self.make_weight_updater(args, self.original_model)
         self.connected = False
 
         self.optimizer_state_dict = {}
@@ -145,7 +140,7 @@ class FSDPTrainRayActor(TrainRayActor):
         return 0
 
     @property
-    def original_model(self) -> torch.nn.Module:
+    def original_model(self) -> PreTrainedModel:
         return self.model
 
     @timer

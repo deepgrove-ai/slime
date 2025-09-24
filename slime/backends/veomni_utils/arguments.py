@@ -42,7 +42,7 @@ class VeOmniArgs:
     reduce_dtype: str = DType.fp32.value  # Options: "bf16", "
     model_dtype: str = DType.bf16.value  # Options: "bf16", "fp16", "fp32"
 
-    moe_implementation: str = "fused"  # Options: "fused", "eager"
+    moe_implementation: str = "eager"  # Options: "fused", "eager"
 
     # Currently broken
     compile: bool = False

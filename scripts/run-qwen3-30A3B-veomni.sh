@@ -29,11 +29,15 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-30B-A3B
    --ref-load /root/Qwen3-30B-A3B-merge
-   --expert-parallel-size 8
    #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
    # --load /root/Qwen3-30B-A3B_slime/
    # --save /root/Qwen3-30B-A3B_slime/
    # --save-interval 20
+)
+
+MODEL_ARGS=(
+   --expert-parallel-size 8
+   --moe-implementation fused
 )
 
 ROLLOUT_ARGS=(
@@ -55,7 +59,7 @@ ROLLOUT_ARGS=(
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data_256
-   --load-debug-rollout-data ./test/debug_rollout_data_256
+   # --load-debug-rollout-data ./test/debug_rollout_data_256
 )
 
 EVAL_ARGS=(
@@ -103,7 +107,7 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
+   # --use-wandb
    --wandb-project slime-dev
    --wandb-group Qwen3-30B-A3B-test-veomni
    # --wandb-key ${WANDB_KEY}
@@ -113,6 +117,7 @@ SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+   # --sglang-ep-size 8
 )
 
 # MISC_ARGS=(
