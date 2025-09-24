@@ -9,10 +9,9 @@ description = "Slime - A distributed training and inference framework"
 authors = [{ name = "slime Team" }]
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+# Needs to lock to python 3.12 because the SGLang image builds with 3.12
+requires-python = ">=3.12,<3.13"
 classifiers = [
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Environment :: GPU :: NVIDIA CUDA",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -36,6 +35,7 @@ dependencies = [
     # Megatron-LM requires numpy==1.26.4 https://github.com/NVIDIA/Megatron-LM/issues/1563
     "numpy==1.26.4",
     "sglang-router>=0.1.9",
+    "pytorch-triton",
 ]
 
 [dependency-groups]
@@ -122,13 +122,18 @@ markers = [
 
 no-build-isolation-package = ["flash-attn"]
 default-groups = ["dev", "docker-override"]
+prerelease = "allow"
 
 [tool.uv.sources]
 "veomni" = { path = "VeOmni", editable = true }
 "torch_memory_saver" = { git = "https://github.com/fzyzcjy/torch_memory_saver.git" }
 torch = [{ index = "torch_12.8", marker = "sys_platform == 'linux'" }]
+"pytorch-triton" = [
+    { index = "torch_12.8", marker = "sys_platform == 'linux'" },
+]
 
 [[tool.uv.index]]
 name = "torch_12.8"
+# url = "https://download.pytorch.org/whl/test/cu126"
 url = "https://download.pytorch.org/whl/cu126"
 explicit = true
