@@ -6,7 +6,7 @@ import torch.distributed.fsdp._fully_shard._fsdp_param_group
 
 from veomni.distributed.parallel_state import init_parallel_state
 from veomni.models.auto import build_foundation_model
-from veomni.distributed.torch_parallelize import build_parallelize_model
+from veomni.distributed.torch_parallelize import build_parallelize_model, MixedPrecisionConfig, DType
 from veomni.optim.optimizer import MultiOptimizer, build_optimizer
 from .arguments import VeOmnniFullArgs
 
@@ -103,6 +103,12 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         if args.data_parallel_shard_size == -1:
             args.data_parallel_shard_size = data_parallel_size(args) // args.data_parallel_replicate_size
         assert args.data_parallel_shard_size > 0, "data_parallel_shard_size should be greater than 0."
+
+        self.mixed_precision_config = MixedPrecisionConfig(
+            forward_dtype=DType(args.forward_dtype),
+            reduce_dtype=DType(args.reduce_dtype),
+            model_dtype=DType(args.model_dtype),
+        )
         init_parallel_state(
             dp_size=data_parallel_size(args),
             dp_replicate_size=args.data_parallel_replicate_size,
@@ -119,7 +125,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             config_path=args.load,
             quantize=args.quantize,  # Student model quantization
             weights_path=args.load,
-            torch_dtype="bfloat16",
+            torch_dtype=self.mixed_precision_config.model_dtype.value,
             init_device="meta",
             # attn_implementation=args.model.attn_implementation,
             moe_implementation=args.moe_implementation,
@@ -128,12 +134,13 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         basic_modules = model._no_split_modules if model._no_split_modules is not None else []
         if isinstance(args.basic_modules, list):
             basic_modules.extend(args.basic_modules)
+
         model = build_parallelize_model(
             model,
             init_device="meta",
             weights_path=args.load,
             enable_full_shard=args.enable_full_shard,
-            enable_mixed_precision=args.enable_mixed_precision,
+            mixed_precision_config=self.mixed_precision_config,
             enable_gradient_checkpointing=args.enable_gradient_checkpointing,
             enable_fsdp_offload=args.enable_fsdp_offload,
             # For some reason this messes with grad norms

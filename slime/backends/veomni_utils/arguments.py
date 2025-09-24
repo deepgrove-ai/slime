@@ -1,10 +1,10 @@
 import argparse
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Optional
 
 import yaml
-
+from veomni.utils.dtype import DType
 
 from slime.utils.arguments_type import FullArgs
 
@@ -31,14 +31,18 @@ class VeOmniArgs:
     # fsdp_backward_prefetch: bool = True
 
     enable_full_shard: bool = True
-    enable_mixed_precision: bool = True
     enable_gradient_checkpointing: bool = True
     enable_fsdp_offload: bool = False
     enable_forward_prefetch: bool = True
     enable_reentrant: bool = False
+
     quantize: bool = False
 
-    moe_implementation: str = "fused" # Options: "fused", "eager"
+    forward_dtype: str = DType.bf16.value  # Options: "bf16", "fp16", "fp32"
+    reduce_dtype: str = DType.fp32.value  # Options: "bf16", "
+    model_dtype: str = DType.bf16.value  # Options: "bf16", "fp16", "fp32"
+
+    moe_implementation: str = "fused"  # Options: "fused", "eager"
 
     # Currently broken
     compile: bool = False
