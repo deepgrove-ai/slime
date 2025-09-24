@@ -5,7 +5,9 @@ hf download Qwen/Qwen3-0.6B --local-dir /root/Qwen3-0.6B
 hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
 hf download Qwen/Qwen3-14B --local-dir /root/Qwen3-14B
 hf download RedMod/qsft_14b --local-dir /root/qsft_14b
+hf download Qwen/Qwen3-30B-A3B --local-dir /root/Qwen3-30B-A3B
 # Download training dataset (dapo-math-17k)
+python3 VeOmni/scripts/moe_ckpt_merge/moe_merge.py --raw_hf_path /root/Qwen3-30B-A3B  --merge_hf_path /root/Qwen3-30B-A3B-merge
 hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
 
 # Download evaluation dataset (aime-2024)

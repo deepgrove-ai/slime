@@ -38,6 +38,8 @@ class VeOmniArgs:
     enable_reentrant: bool = False
     quantize: bool = False
 
+    moe_implementation: str = "fused" # Options: "fused", "eager"
+
     # Currently broken
     compile: bool = False
 

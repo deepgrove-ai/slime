@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
 
 DEBUG_ARGS=(
    # --save-debug-rollout-data ./test/debug_rollout_data_256
-   --load-debug-rollout-data ./test/debug_rollout_data_256
+   # --load-debug-rollout-data ./test/debug_rollout_data_256
 )
 
 EVAL_ARGS=(

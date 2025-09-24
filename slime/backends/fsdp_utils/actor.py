@@ -495,12 +495,13 @@ class FSDPTrainRayActor(TrainRayActor):
                             wandb.log(log_dict)
                     self.global_step += 1
 
-        train_memory_stats = available_memory()
-        # Prefix with train_mem/
-        train_memory_stats = {f"train_mem/{k}": v for k, v in train_memory_stats.items()}
-        train_memory_stats["rollout/step"] = rollout_id
         # TODO: All reduce train_memory_stats
         if dist.get_rank() == 0 and self.args.use_wandb:
+            train_memory_stats = available_memory()
+            # Prefix with train_mem/
+            train_memory_stats = {f"train_mem/{k}": v for k, v in train_memory_stats.items()}
+            train_memory_stats["rollout/step"] = rollout_id
+
             wandb.log(train_memory_stats)
 
         self.update_cpu_params_dict(self.weights["actor"])

@@ -100,7 +100,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             torch_dtype="bfloat16",
             init_device="meta",
             # attn_implementation=args.model.attn_implementation,
-            # moe_implementation=args.model.moe_implementation,
+            moe_implementation=args.moe_implementation,
             # force_use_huggingface=args.model.force_use_huggingface,
         )
         basic_modules = model._no_split_modules if model._no_split_modules is not None else []
