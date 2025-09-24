@@ -1,12 +1,13 @@
+from torch.distributed.checkpoint.state_dict import StateDictOptions
 from slime.backends.fsdp_utils.update_weight_utils import PreprocessTensorFunc
 import torch
 from veomni.models.transformers.qwen3_moe.modeling_qwen3_moe import quantize
-
+import torch.distributed.fsdp._fully_shard._fsdp_param_group
 
 from veomni.distributed.parallel_state import init_parallel_state
 from veomni.models.auto import build_foundation_model
 from veomni.distributed.torch_parallelize import build_parallelize_model
-from veomni.optim.optimizer import build_optimizer
+from veomni.optim.optimizer import MultiOptimizer, build_optimizer
 from .arguments import VeOmnniFullArgs
 
 from dataclasses import dataclass, field
@@ -75,6 +76,27 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             return None
         return preprocess_tensor_for_update_weights
 
+    @torch.no_grad()
+    def offload_optimizer(self):
+        if not isinstance(self.optimizer, MultiOptimizer):
+            return super().offload_optimizer()
+        self.optimizer_state_dict = self.optimizer.state_dict(
+            options=StateDictOptions(cpu_offload=True, full_state_dict=False)
+        )
+        self.optimizer.clear_state()
+
+    @torch.no_grad()
+    def update_gpu_optimizer_dict(self):
+        if not isinstance(self.optimizer, MultiOptimizer):
+            return super().update_gpu_optimizer_dict()
+        if not self.optimizer_state_dict:
+            print("No optimizer state dict to update")
+            return
+        self.optimizer.load_state_dict(
+            self.optimizer_state_dict,
+            options=StateDictOptions(full_state_dict=False, strict=True),
+        )
+
     def init_model(self, args: VeOmnniFullArgs):
         # TODO: Configure torch seperately
         torch.set_float32_matmul_precision("high")
@@ -94,9 +116,9 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         )
         # with torch.device(f"cuda:{torch.cuda.current_device()}"):
         model = build_foundation_model(
-            config_path=args.hf_checkpoint,
+            config_path=args.load,
             quantize=args.quantize,  # Student model quantization
-            weights_path=args.hf_checkpoint,
+            weights_path=args.load,
             torch_dtype="bfloat16",
             init_device="meta",
             # attn_implementation=args.model.attn_implementation,
@@ -109,7 +131,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         model = build_parallelize_model(
             model,
             init_device="meta",
-            weights_path=args.hf_checkpoint,
+            weights_path=args.load,
             enable_full_shard=args.enable_full_shard,
             enable_mixed_precision=args.enable_mixed_precision,
             enable_gradient_checkpointing=args.enable_gradient_checkpointing,
@@ -134,7 +156,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
 
     def load_ref_model(self, ref_load_path):
         """Load reference model parameters once and store in CPU memory (like Megatron backend)"""
-        assert ref_load_path == self.args.hf_checkpoint, "Reference model path must be the same as the model path"
+        assert ref_load_path == self.args.load, "Reference model path must be the same as the model path"
         self.weights["ref"] = {}
         self.update_cpu_params_dict(self.weights["ref"])
         print("Reference model parameters loaded and stored in CPU memory")

@@ -1,5 +1,5 @@
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, Union
 
 import torch
 import torch.distributed as dist
@@ -57,7 +57,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def init_model(self, args) -> PreTrainedModel:
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
             model = AutoModelForCausalLM.from_pretrained(
-                args.hf_checkpoint,
+                args.load,
                 trust_remote_code=True,
             )
         if args.gradient_checkpointing:
@@ -105,12 +105,12 @@ class FSDPTrainRayActor(TrainRayActor):
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
-                self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-                self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+                self.hf_config = AutoConfig.from_pretrained(self.args.load, trust_remote_code=True)
+                self.tokenizer = AutoTokenizer.from_pretrained(self.args.load, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
         if self.args.multimodal_keys:
-            self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+            self.vlm_processor = AutoProcessor.from_pretrained(self.args.load, trust_remote_code=True)
 
         # Load model
         print_memory("before init model")
@@ -289,6 +289,12 @@ class FSDPTrainRayActor(TrainRayActor):
         return padded_batches
 
     @classmethod
+    def clip_grad_norm(cls, model: torch.nn.Module, max_norm: float, norm_type: Union[float, int] = 2.0) -> float:
+        if hasattr(model, "clip_grad_norm_"):
+            return model.clip_grad_norm_(max_norm, norm_type=norm_type)
+        return torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm, norm_type=norm_type)
+
+    @classmethod
     def check_logprobs(cls, logprobs: torch.Tensor, loss_masks: torch.Tensor, rollout_log_probs: torch.Tensor):
         assert logprobs.shape == loss_masks.shape == rollout_log_probs.shape, (
             f"{logprobs.shape=} != {loss_masks.shape=} != {rollout_log_probs.shape=}"
@@ -447,7 +453,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
                 if (mbs_id + 1) % grad_accum == 0:
                     # TODO: check if the grad norm is global grad norm.
-                    grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+                    grad_norm = self.clip_grad_norm(self.model, self.args.clip_grad)
                     self.optimizer.step()
                     self.optimizer.zero_grad(set_to_none=True)
                     aggregated = {}
@@ -542,28 +548,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.optimizer_state_dict = get_optimizer_state_dict(
             self.model, self.optimizer, options=StateDictOptions(cpu_offload=True, full_state_dict=False)
         )
-
-        # 2) Drop the live state from the optimizer to free GPU memory
-        #    (safe: PyTorch will lazily re-create on next .step() if you reload later)
         self.optimizer.state.clear()
-
-        # optimizer_sd: dict[str, Any] = get_optimizer_state_dict(
-        #     self.model,
-        #     self.optimizer,
-        #     options=StateDictOptions(full_state_dict=False, cpu_offload=False),
-        # )
-        # for name, val in optimizer_sd.items():
-        #     if isinstance(val, DTensor):
-        #         local = val.to_local()
-        #     elif isinstance(val, torch.Tensor):
-        #         local = val
-        #     else:
-        #         continue
-        #     buf = self.optimizer_state_dict.get(name)
-        #     if buf is None or buf.shape != local.shape or buf.dtype != local.dtype:
-        #         self.optimizer_state_dict[name] = torch.empty_like(local, device=torch.device("cpu"), pin_memory=True)
-        #     self.optimizer_state_dict[name].copy_(local, non_blocking=True)
-        # torch.cuda.synchronize()
 
     @torch.no_grad()
     def update_gpu_optimizer_dict(self):
@@ -576,35 +561,6 @@ class FSDPTrainRayActor(TrainRayActor):
             optim_state_dict=self.optimizer_state_dict,
             options=StateDictOptions(full_state_dict=False, strict=True),
         )
-        # template = get_optimizer_state_dict(
-        #     self.original_model,
-        #     self.optimizer,
-        #     options=StateDictOptions(full_state_dict=False, cpu_offload=False),
-        # )
-        # device = torch.cuda.current_device()
-        # rebuild: dict[str, Any] = {}
-        # for name, val in template.items():
-        #     if isinstance(val, DTensor):
-        #         local_cpu = optimizer_dict[name]
-        #         local_dev = local_cpu.to(device, non_blocking=True)
-        #         rebuild[name] = DTensor.from_local(
-        #             local_dev,
-        #             device_mesh=val.device_mesh,
-        #             placements=val.placements,
-        #             shape=val.size(),
-        #             stride=val.stride(),
-        #         )
-        #     elif isinstance(val, torch.Tensor):
-        #         rebuild[name] = optimizer_dict[name].to(device, non_blocking=True)
-        #     else:
-        #         continue
-        # set_optimizer_state_dict(
-        #     self.model,
-        #     self.optimizer,
-        #     optim_state_dict=rebuild,
-        #     options=StateDictOptions(full_state_dict=False, strict=True),
-        # )
-        # torch.cuda.synchronize()
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
