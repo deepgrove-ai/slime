@@ -60,6 +60,10 @@ def quantize_proj_weights(name: str, tensor: torch.Tensor) -> tuple[tuple[str, t
     if name.endswith("_proj.weight"):
         assert len(tensor.shape) == 2, "Quantized weight should be 2D"
         return ((name, quantize(tensor)),)
+    if name.endswith("_proj"):
+        # MOE EP weights
+        assert len(tensor.shape) == 3, "EP Quantized weight should be 3D"
+        return ((name, quantize(tensor)),)
     return ((name, tensor),)
 
 
@@ -85,9 +89,10 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             preprocess_state_dict = partial(get_full_ep_shard_state, config=model.config, prefix="", model=model)
             resplit_experts_tensor_partial = partial(resplit_experts_tensor, num_experts=int(model.config.num_experts))
             if postprocess is not None:
+                og_postprocess = postprocess
 
                 def reprocess(name: str, tensor: torch.Tensor) -> tuple[tuple[str, torch.Tensor], ...]:
-                    post_processed = postprocess(name, tensor)
+                    post_processed = og_postprocess(name, tensor)
                     reprocessed = tuple(k for n, t in post_processed for k in resplit_experts_tensor_partial(n, t))
                     return reprocessed
 
@@ -98,15 +103,15 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             args, model, postprocess_tensor_func=postprocess, preprocess_state_dict_func=preprocess_state_dict
         )
 
-        monkey_patch_torch_reductions()
-        sharded_state_dict = cast(
-            dict[str, torch.Tensor],
-            get_model_state_dict(model, options=StateDictOptions(full_state_dict=False, cpu_offload=False)),
-        )
-        if preprocess_state_dict is not None:
-            print("Preprocessing state dict for weight updater")
-            sharded_state_dict = preprocess_state_dict(sharded_state_dict)
-            print("Done preprocessing state dict for weight updater")
+        # monkey_patch_torch_reductions()
+        # sharded_state_dict = cast(
+        #     dict[str, torch.Tensor],
+        #     get_model_state_dict(model, options=StateDictOptions(full_state_dict=False, cpu_offload=False)),
+        # )
+        # if preprocess_state_dict is not None:
+        #     print("Preprocessing state dict for weight updater")
+        #     sharded_state_dict = preprocess_state_dict(sharded_state_dict)
+        #     print("Done preprocessing state dict for weight updater")
         return weight_updater
 
     @torch.no_grad()

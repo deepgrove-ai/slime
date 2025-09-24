@@ -24,15 +24,21 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 # SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-# source "${SCRIPT_DIR}/models/qsft_14b.sh"
+# source "${SCRIPT_DIR}/models/Qwen3-30B-A3B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/qsft_14b
-   --ref-load /root/qsft_14b
-   #--hf-checkpoint /root/qsft_14b-FP8
-   # --load /root/qsft_14b_slime/
-   # --save /root/qsft_14b_slime/
+   --hf-checkpoint /root/qreas_30_4000_real
+   --ref-load /root/qreas_30_4000_real-merge
+   #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
+   # --load /root/Qwen3-30B-A3B_slime/
+   # --save /root/Qwen3-30B-A3B_slime/
    # --save-interval 20
+)
+
+MODEL_ARGS=(
+   --expert-parallel-size 8
+   --moe-implementation fused
+   --quantize true
 )
 
 ROLLOUT_ARGS=(
@@ -41,22 +47,21 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   # --rm-type deepscaler
    --rm-type math
+   # --rm-type deepscaler
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
    --global-batch-size 256
-   # --rollout-max-samples 32
    # --balance-data
 )
 
 
 DEBUG_ARGS=(
-   # --save-debug-rollout-data ./test/debug_rollout_data_256_baobab
-   --load-debug-rollout-data ./test/debug_rollout_data_256_baobab
+   # --save-debug-rollout-data ./test/debug_rollout_data_256
+   # --load-debug-rollout-data ./test/debug_rollout_data_256
 )
 
 EVAL_ARGS=(
@@ -96,7 +101,7 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adamw
-   --lr 1e-6
+   --lr 1e-5
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
@@ -106,18 +111,27 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dev
-   --wandb-group qsft_14b-test-veomni
+   --wandb-group mangrove-test-veomni
    # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 4
+   --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+   # --sglang-ep-size 8
 )
 
-MISC_ARGS=(
-   --quantize True
-)
+# MISC_ARGS=(
+#    # default dropout in megatron is 0.1
+#    --attention-dropout 0.0
+#    --hidden-dropout 0.0
+#    # should be good for model performance
+#    --accumulate-allreduce-grads-in-fp32
+#    --attention-softmax-in-fp32
+#    # need to comment this when using model with MLA
+#    --attention-backend flash
+# )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -147,8 +161,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${DEBUG_ARGS[@]} \
-   ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${SGLANG_ARGS[@]}
    # ${EVAL_ARGS[@]} \
    # ${DISTRIBUTED_ARGS[@]} \
+   # ${MISC_ARGS[@]}
    # ${PERF_ARGS[@]} \
