@@ -87,7 +87,10 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         # TODO: Make this less cursed
         if args.moe_implementation == "fused":
             preprocess_state_dict = partial(get_full_ep_shard_state, config=model.config, prefix="", model=model)
-            resplit_experts_tensor_partial = partial(resplit_experts_tensor, num_experts=int(model.config.num_experts))
+
+        num_experts = int(model.config.num_experts) if hasattr(model.config, "num_experts") else None
+        if num_experts is not None:
+            resplit_experts_tensor_partial = partial(resplit_experts_tensor, num_experts=num_experts)
             if postprocess is not None:
                 og_postprocess = postprocess
 
@@ -135,11 +138,21 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             options=StateDictOptions(full_state_dict=False, strict=True),
         )
 
+    def get_model_state_dict(self) -> dict[str, torch.Tensor]:
+        with torch.no_grad():
+            state_dict = cast(
+                dict[str, torch.Tensor],
+                get_model_state_dict(self.original_model, options=StateDictOptions(full_state_dict=False)),
+            )
+            if self.args.moe_implementation == "fused":
+                state_dict = get_full_ep_shard_state(
+                    config=self.original_model.config, prefix="", model=self.original_model, state_dict=state_dict
+                )
+        return state_dict
+
     def init_model(self, args: VeOmnniFullArgs):
         # TODO: Configure torch seperately
         torch.set_float32_matmul_precision("high")
-        if args.moe_implementation == "fused":
-            assert args.expert_parallel_size > 1, "MoE model requires expert parallel size > 1"
         if args.data_parallel_shard_size == -1:
             args.data_parallel_shard_size = data_parallel_size(args) // args.data_parallel_replicate_size
         assert args.data_parallel_shard_size > 0, "data_parallel_shard_size should be greater than 0."
@@ -149,6 +162,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             reduce_dtype=DType(args.reduce_dtype),
             model_dtype=DType(args.model_dtype),
         )
+        print(f"Mixed precision config: {self.mixed_precision_config}")
         init_parallel_state(
             dp_size=data_parallel_size(args),
             dp_replicate_size=args.data_parallel_replicate_size,
@@ -169,7 +183,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
             init_device="meta",
             # attn_implementation=args.model.attn_implementation,
             moe_implementation=args.moe_implementation,
-            # force_use_huggingface=args.model.force_use_huggingface,
+            # force_use_huggingface=True,
         )
         basic_modules = model._no_split_modules if model._no_split_modules is not None else []
         if isinstance(args.basic_modules, list):
@@ -210,7 +224,7 @@ class VeOmniTrainRayActor(FSDPTrainRayActor):
         print("Reference model parameters loaded and stored in CPU memory")
 
     @property
-    def original_model(self):
+    def original_model(self) -> PreTrainedModel:
         if self.args.compile:
             assert hasattr(self.model, "_orig_mod"), "Model is not compiled with torch.compile"
             return self.model._orig_mod

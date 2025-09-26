@@ -168,6 +168,12 @@ class FSDPTrainRayActor(TrainRayActor):
         torch_memory_saver.resume()
         print_memory("after wake_up model")
 
+    def get_model_state_dict(self) -> dict[str, torch.Tensor]:
+        with torch.no_grad():
+            state_dict = get_model_state_dict(self.model, options=StateDictOptions(full_state_dict=False))
+
+        return state_dict
+
     def save_model(self, iteration):
         if self.args.debug_rollout_only:
             return
@@ -176,7 +182,11 @@ class FSDPTrainRayActor(TrainRayActor):
 
         os.makedirs(f"{self.args.save}/iter_{iteration:07}/hf", exist_ok=True)
 
-        self.model.save_pretrained(f"{self.args.save}/iter_{iteration:07}/hf", save_dtype=torch.bfloat16)
+        self.model.save_pretrained(
+            f"{self.args.save}/iter_{iteration:07}/hf",
+            save_dtype=torch.bfloat16,
+            state_dict=self.get_model_state_dict(),
+        )
 
     def compute_log_prob(
         self,
@@ -332,7 +342,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
             # check log_probs
-            self.check_logprobs(batch["log_probs"], batch["loss_masks"], batch["rollout_log_probs"])
+            batch["rollout_kl"] = (batch["rollout_log_probs"] - batch["log_probs"]).abs()
             if self.args.advantage_estimator in ["grpo", "gspo"]:
                 batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
             else:
@@ -340,7 +350,15 @@ class FSDPTrainRayActor(TrainRayActor):
 
         log_dict = {}
 
-        for key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward", "rollout_log_probs"]:
+        for key in [
+            "log_probs",
+            "ref_log_probs",
+            "advantages",
+            "returns",
+            "raw_reward",
+            "rollout_log_probs",
+            "rollout_kl",
+        ]:
             if key not in padded_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
@@ -397,6 +415,20 @@ class FSDPTrainRayActor(TrainRayActor):
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     logits = self.model(input_ids=batch["tokens"]).logits
                 log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
+                # with torch.no_grad():
+                #     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                #         logits2 = self.model(input_ids=batch["tokens"]).logits
+                #     log_probs2 = gather_log_probs(logits2, batch["tokens"], self.args.rollout_temperature)
+                #     l2_dist = torch.nn.functional.mse_loss(
+                #         log_probs * batch["loss_masks"], log_probs2 * batch["loss_masks"]
+                #     )
+                #     logger.info(f"Check l2 distance between two forward logprobs: {l2_dist:.6f}")
+                #     l2_dist = torch.nn.functional.mse_loss(
+                #         batch["log_probs"] * batch["loss_masks"], log_probs2 * batch["loss_masks"]
+                #     )
+                #     logger.info(f"Check l2 distance between forward logprobs and rollout logprobs: {l2_dist:.6f}")
+                #     # if l2_dist > 1e-3:
+                #     # logger.warning(f"L2 distance between two forward logprobs is {l2_dist:.4f}")
 
                 if self.args.advantage_estimator == "gspo":
                     raise NotImplementedError("implement GSPO")
@@ -563,27 +595,12 @@ class FSDPTrainRayActor(TrainRayActor):
         Store ONLY this rank's shards on pinned CPU.
         Works with DTensor+DeviceMesh by extracting local shards.
         """
-        model_sd: dict[str, Any] = get_model_state_dict(
+        model_sd: dict[str, torch.Tensor] = get_model_state_dict(
             self.original_model,
-            options=StateDictOptions(full_state_dict=False, cpu_offload=False),
+            options=StateDictOptions(full_state_dict=False, cpu_offload=True),
         )
-        # print(f"{model_sd=}")
-
-        for name, val in model_sd.items():
-            if isinstance(val, DTensor):
-                local = val.to_local()  # this rank's shard on device
-            elif isinstance(val, torch.Tensor):
-                local = val  # unsharded tensor on device
-            else:
-                continue  # skip non-tensors/metadata if any
-
-            buf = params_dict.get(name)
-            if buf is None or buf.shape != local.shape or buf.dtype != local.dtype:
-                params_dict[name] = torch.empty_like(local, device=torch.device("cpu"), pin_memory=True)
-            params_dict[name].copy_(local, non_blocking=True)
-
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        params_dict.clear()
+        params_dict.update(model_sd)
 
     @torch.no_grad()
     def update_gpu_params_dict(self, params_dict: dict[str, torch.Tensor], strict: bool = True) -> None:

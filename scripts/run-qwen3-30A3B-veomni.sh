@@ -28,16 +28,18 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-30B-A3B
+   # --ref-load /root/Qwen3-30B-A3B
    --ref-load /root/Qwen3-30B-A3B-merge
    #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
-   # --load /root/Qwen3-30B-A3B_slime/
-   # --save /root/Qwen3-30B-A3B_slime/
-   # --save-interval 20
+   --load /root/Qwen3-30B-A3B_slime/
+   --save /root/Qwen3-30B-A3B_slime/
+   --save-interval 20
 )
 
 MODEL_ARGS=(
    --expert-parallel-size 8
    --moe-implementation fused
+   # --ulysses-parallel-size 1
 )
 
 ROLLOUT_ARGS=(
@@ -58,8 +60,8 @@ ROLLOUT_ARGS=(
 
 
 DEBUG_ARGS=(
-   # --save-debug-rollout-data ./test/debug_rollout_data_256
-   # --load-debug-rollout-data ./test/debug_rollout_data_256
+   # --save-debug-rollout-data ./test/debug_rollout_data_256_qwen30A3B
+   # --load-debug-rollout-data ./test/debug_rollout_data_256_qwen30A3B
 )
 
 EVAL_ARGS=(
@@ -89,7 +91,7 @@ EVAL_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
-   --use-kl-loss
+   # --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
@@ -99,7 +101,7 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adamw
-   --lr 1e-6
+   --lr 1e-5
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
@@ -107,7 +109,7 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   # --use-wandb
+   --use-wandb
    --wandb-project slime-dev
    --wandb-group Qwen3-30B-A3B-test-veomni
    # --wandb-key ${WANDB_KEY}

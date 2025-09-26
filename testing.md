@@ -32,4 +32,12 @@ PYTHONPATH=/root/Megatron-LM uv run --no-sync python tools/convert_hf_to_torch_d
     ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/Qwen3-4B \
     --save /root/Qwen3-4B_torch_dist
+
+
+source scripts/models/qwen3-30B-A3B.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --hf-checkpoint /root/Qwen3-30B-A3B/ \
+   --save /root/Qwen3-30B-A3B_torch_dist/
 ```

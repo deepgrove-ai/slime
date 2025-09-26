@@ -229,6 +229,10 @@ def log_rollout_data(rollout_id, args, rollout_data):
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
         rollout_data["abs_advantages"] = [k.abs() for k in rollout_data["advantages"]]
+        rollout_data["rollout_kl"] = [
+            (logp - rollout_logp).abs()
+            for logp, rollout_logp in zip(rollout_data["log_probs"], rollout_data["rollout_log_probs"])
+        ]
         response_lengths = rollout_data["response_lengths"]
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
@@ -251,6 +255,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
                         "returns",
                         "advantages",
                         "abs_advantages",
+                        "rollout_kl",
                     ]:
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:

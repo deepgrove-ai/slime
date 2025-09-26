@@ -31,8 +31,8 @@ CKPT_ARGS=(
    --ref-load /root/qreas_30_4000_real-merge
    #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
    # --load /root/Qwen3-30B-A3B_slime/
-   # --save /root/Qwen3-30B-A3B_slime/
-   # --save-interval 20
+   --save /root/Mangrove_slime/
+   --save-interval 20
 )
 
 MODEL_ARGS=(
@@ -91,7 +91,7 @@ EVAL_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
-   --use-kl-loss
+   # --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
@@ -101,7 +101,7 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adamw
-   --lr 1e-5
+   --lr 1e-4
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
